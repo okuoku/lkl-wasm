@@ -1,0 +1,2 @@
+#!/bin/bash
+exec clang --target=wasm32 -ffreestanding $*

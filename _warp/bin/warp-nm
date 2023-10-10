@@ -1,0 +1,3 @@
+#!/bin/bash
+echo WARP-NM: $* 1>&2
+exec llvm-nm $*
