@@ -887,7 +887,11 @@ kfree_skb_reason(struct sk_buff *skb, enum skb_drop_reason reason)
 
 	DEBUG_NET_WARN_ON_ONCE(reason <= 0 || reason >= SKB_DROP_REASON_MAX);
 
+#ifndef __wasm__
 	trace_kfree_skb(skb, __builtin_return_address(0), reason);
+#else
+	trace_kfree_skb(skb, (void*)0xdeadcafe, reason);
+#endif
 	__kfree_skb(skb);
 }
 EXPORT_SYMBOL(kfree_skb_reason);
@@ -2149,7 +2153,11 @@ void *skb_put(struct sk_buff *skb, unsigned int len)
 	skb->tail += len;
 	skb->len  += len;
 	if (unlikely(skb->tail > skb->end))
+#ifndef __wasm__
 		skb_over_panic(skb, len, __builtin_return_address(0));
+#else
+		skb_over_panic(skb, len, (void*)0xdeadcafe);
+#endif
 	return tmp;
 }
 EXPORT_SYMBOL(skb_put);
@@ -2168,7 +2176,11 @@ void *skb_push(struct sk_buff *skb, unsigned int len)
 	skb->data -= len;
 	skb->len  += len;
 	if (unlikely(skb->data < skb->head))
+#ifndef __wasm__
 		skb_under_panic(skb, len, __builtin_return_address(0));
+#else
+		skb_under_panic(skb, len, (void*)0xdeadcafe);
+#endif
 	return skb->data;
 }
 EXPORT_SYMBOL(skb_push);

@@ -15,7 +15,11 @@
 #define UINT_MAX	(~0U)
 #endif
 
+#ifndef __wasm__
 #define _RET_IP_		((unsigned long)__builtin_return_address(0))
+#else
+#define _RET_IP_		((unsigned long)0xdeadcafe)
+#endif
 
 #define PERF_ALIGN(x, a)	__PERF_ALIGN_MASK(x, (typeof(x))(a)-1)
 #define __PERF_ALIGN_MASK(x, mask)	(((x)+(mask))&~(mask))

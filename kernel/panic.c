@@ -641,14 +641,23 @@ void warn_slowpath_fmt(const char *file, int line, unsigned taint,
 	pr_warn(CUT_HERE);
 
 	if (!fmt) {
+#ifndef __wasm__
 		__warn(file, line, __builtin_return_address(0), taint,
 		       NULL, NULL);
+#else
+		__warn(file, line, (void*)0xdeadcafe, taint,
+		       NULL, NULL);
+#endif
 		return;
 	}
 
 	args.fmt = fmt;
 	va_start(args.args, fmt);
+#ifndef __wasm__
 	__warn(file, line, __builtin_return_address(0), taint, NULL, &args);
+#else
+	__warn(file, line, (void*)0xdeadcafe, taint, NULL, &args);
+#endif
 	va_end(args.args);
 }
 EXPORT_SYMBOL(warn_slowpath_fmt);
@@ -700,8 +709,13 @@ device_initcall(register_warn_debugfs);
 __visible noinstr void __stack_chk_fail(void)
 {
 	instrumentation_begin();
+#ifndef __wasm__
 	panic("stack-protector: Kernel stack is corrupted in: %pB",
 		__builtin_return_address(0));
+#else
+	panic("stack-protector: Kernel stack is corrupted in: %pB",
+		(void*)0xdeadcafe);
+#endif
 	instrumentation_end();
 }
 EXPORT_SYMBOL(__stack_chk_fail);

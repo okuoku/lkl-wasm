@@ -247,8 +247,13 @@ xfs_buf_read(
 {
 	DEFINE_SINGLE_BUF_MAP(map, blkno, numblks);
 
+#ifndef __wasm__
 	return xfs_buf_read_map(target, &map, 1, flags, bpp, ops,
 			__builtin_return_address(0));
+#else
+	return xfs_buf_read_map(target, &map, 1, flags, bpp, ops,
+			(void*)0xdeadcafe);
+#endif
 }
 
 static inline void
