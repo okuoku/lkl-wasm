@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0
 
+#if 0
 #include <linux/linkage.h>
 #include <linux/errno.h>
 
@@ -479,3 +480,5 @@ COND_SYSCALL(setuid16);
 
 /* restartable sequence */
 COND_SYSCALL(rseq);
+
+#endif
