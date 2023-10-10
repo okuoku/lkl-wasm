@@ -15,14 +15,22 @@ __SYSCALL(__NR_virtio_mmio_device_add, sys_virtio_mmio_device_add)
 
 #ifdef __MINGW32__
 #define SECTION_ATTRS "n0"
+#define SECTION_ATTRS_TAIL
+#define SECTION_ATTRS_TAIL_TEXT
+#elif defined(__wasm__)
+#define SECTION_ATTRS ""
+#define SECTION_ATTRS_TAIL ",@"
+#define SECTION_ATTRS_TAIL_TEXT ",\"\",@"
 #else
 #define SECTION_ATTRS "a"
+#define SECTION_ATTRS_TAIL
+#define SECTION_ATTRS_TAIL_TEXT
 #endif
 
 #define __SYSCALL_DEFINE_ARCH(x, name, ...)				\
-	asm(".section .syscall_defs,\"" SECTION_ATTRS "\"\n"		\
+	asm(".section .syscall_defs,\"" SECTION_ATTRS "\"" SECTION_ATTRS_TAIL "\n"		\
 	    ".ascii \"#ifdef __NR" #name "\\n\"\n"			\
 	    ".ascii \"SYSCALL_DEFINE" #x "(" #name ","			\
 	    __ASCII_MAP(x, __SC_ASCII, __VA_ARGS__) ")\\n\"\n"		\
 	    ".ascii \"#endif\\n\"\n"					\
-	    ".section .text\n");
+	    ".section .text" SECTION_ATTRS_TAIL_TEXT "\n");
