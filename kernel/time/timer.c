@@ -59,6 +59,10 @@
 
 __visible u64 jiffies_64 __cacheline_aligned_in_smp = INITIAL_JIFFIES;
 
+#ifdef __wasm__
+extern unsigned long volatile __cacheline_aligned_in_smp __jiffy_arch_data __attribute__((alias ("jiffies_64"))) jiffies;
+#endif
+
 EXPORT_SYMBOL(jiffies_64);
 
 /*
