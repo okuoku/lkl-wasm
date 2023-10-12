@@ -1,4 +1,5 @@
-#define DUMMYSYM(x) const void* x = 0
+static char dummy_page[64*1024];
+#define DUMMYSYM(x) const void* x = dummy_page
 
 /* tables */
 DUMMYSYM(__initcall0_start);
@@ -41,7 +42,6 @@ DUMMYSYM(__irqentry_text_start);
 DUMMYSYM(__softirqentry_text_end);
 DUMMYSYM(__softirqentry_text_start);
 
-static char dummy_page[64*1024];
 extern char* __attribute((alias ("dummy_page"))) init_thread_union;
 extern char* __attribute((alias ("dummy_page"))) init_stack;
 
@@ -84,7 +84,9 @@ int lkl_printf(const char* fmt, ...){
 void lkl_bug(const char* fmt, ...){
 }
 
+void* lklhost_getops(void);
+
 void init(void){
-    lkl_init(0); // FIXME:
-    lkl_start_kernel("");
+    lkl_init(lklhost_getops());
+    lkl_start_kernel(""); // FIXME
 }
