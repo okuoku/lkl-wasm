@@ -3,6 +3,7 @@
 #include <stdlib.h>
 #include "lin.h"
 
+#include <thread>
 #include <mutex>
 #include <semaphore>
 
@@ -14,6 +15,7 @@ enum objtype{
     OBJTYPE_SEM = 2,
     OBJTYPE_MUTEX = 3,
     OBJTYPE_RECURSIVE_MUTEX = 4,
+    OBJTYPE_THREAD = 5,
 };
 
 struct hostobj_s {
@@ -23,14 +25,22 @@ struct hostobj_s {
         std::counting_semaphore<>* sem;
         std::mutex* mtx;
         std::recursive_mutex* mtx_recursive;
+        struct {
+            uintptr_t func32;
+            uintptr_t arg32;
+            uintptr_t ret;
+            std::thread* thread;
+        } thr;
     } obj;
 };
 
 #define MAX_HOSTOBJ 4096
+std::mutex objmtx;
 struct hostobj_s objtbl[MAX_HOSTOBJ];
 
 static int
 newobj(objtype type){
+    std::lock_guard<std::mutex> NN(objmtx);
     int i;
     for(i=0;i!=MAX_HOSTOBJ;i++){
         if(objtbl[i].type == OBJTYPE_FREE){
@@ -125,6 +135,102 @@ mod_syncobjects(uint64_t* in, uint64_t* out){
     }
 }
 
+thread_local int my_thread_objid;
+typedef uint32_t (*funcptr)(w2c_lin*, uint32_t);
+
+static funcptr
+getfunc(int idx){
+    void* p;
+    printf("Converting %d ...", idx);
+    if(idx >= the_linux.w2c_T0.size){
+        abort();
+    }
+    p = (void*)the_linux.w2c_T0.data[idx].func;
+    printf(" %p\n", p);
+    return (funcptr)p;
+}
+
+static uintptr_t
+thr_trampoline(int objid){
+    funcptr f;
+    uint32_t ret;
+    my_thread_objid = objid;
+    f = getfunc(objtbl[objid].obj.thr.func32);
+    ret = f(&the_linux, objtbl[objid].obj.thr.arg32);
+    objtbl[objid].obj.thr.ret = ret;
+    return ret; /* debug */
+}
+
+static void
+mod_threads(uint64_t* in, uint64_t* out){
+    int idx, idx2;
+    uintptr_t res;
+    switch(in[0]){
+        case 1: /* thread_create [2 1 func32 arg32] => [thr32] */
+            idx = newobj(OBJTYPE_THREAD);
+            objtbl[idx].obj.thr.func32 = in[1];
+            objtbl[idx].obj.thr.arg32 = in[2];
+            objtbl[idx].obj.thr.thread = new std::thread(thr_trampoline, idx);
+            out[0] = idx;
+            break;
+        case 2: /* thread_detach [2 2] => [] */
+            idx = my_thread_objid;
+            if(objtbl[idx].type != OBJTYPE_THREAD){
+                abort();
+            }
+            objtbl[idx].obj.thr.thread->detach();
+            break;
+        case 3: /* thread_exit [2 3] => [] */
+            idx = my_thread_objid;
+            if(objtbl[idx].type != OBJTYPE_THREAD){
+                abort();
+            }
+            printf("UNIMPL.\n");
+            abort();
+            break;
+        case 4: /* thread_join [2 4 thr32] => [result] */
+            idx = in[1];
+            if(objtbl[idx].type != OBJTYPE_THREAD){
+                abort();
+            }
+            out[0] = objtbl[idx].obj.thr.ret;
+            delobj(idx);
+            break;
+        case 5: /* thread_self [2 5] => [thr32] */
+            idx = my_thread_objid;
+            if(objtbl[idx].type != OBJTYPE_THREAD){
+                abort();
+            }
+            out[0] = idx;
+            break;
+        case 6: /* thread_equal [2 6 thr32 thr32] => [equ?] */
+            idx = in[1];
+            idx2 = in[2];
+            if(objtbl[idx].type != OBJTYPE_THREAD){
+                abort();
+            }
+            if(objtbl[idx2].type != OBJTYPE_THREAD){
+                abort();
+            }
+            out[0] = (idx == idx2) ? 1 : 0;
+            break;
+        case 7: /* gettid [2 7] => [tid] */
+            idx = my_thread_objid;
+            if(objtbl[idx].type != OBJTYPE_THREAD){
+                abort();
+            }
+            out[0] = idx;
+            break;
+        case 8: /* tls_alloc [2 8 func32] => [tlskey32] */
+        case 9: /* tls_free [2 9 tlskey32] => [] */
+        case 10: /* tls_set [2 10 tlskey32 ptr32] => [res] */
+        case 11: /* tls_get [2 11 tlskey32] => [ptr32] */
+        default:
+            abort();
+            break;
+    }
+}
+
 void
 w2c_env_nccc_call64(struct w2c_env* env, u32 inptr, u32 outptr){
     uint8_t* inp;
@@ -149,8 +255,10 @@ w2c_env_nccc_call64(struct w2c_env* env, u32 inptr, u32 outptr){
         case 1: /* syncobjects */
             mod_syncobjects(&in[1], out);
             break;
-        case 0: /* Admin */
         case 2: /* threads */
+            mod_threads(&in[1], out);
+            break;
+        case 0: /* Admin */
         case 3: /* memory mgr */
         case 4: /* timer */
         case 5: /* context */
