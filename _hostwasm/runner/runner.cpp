@@ -275,6 +275,27 @@ mod_memorymgr(uint64_t* in, uint64_t* out){
 }
 
 void
+mod_admin(uint64_t* in, uint64_t* out){
+    char* buf;
+    wasm_rt_memory_t* mem;
+    switch(in[0]){
+        case 1: /* print [0 1 str len] => [] */
+            mem = w2c_lin_memory(&the_linux);
+            buf = (char*)malloc(in[2] + 1);
+            buf[in[2]] = 0;
+            memcpy(buf, mem->data + in[1], in[2]);
+            puts(buf);
+            break;
+        case 2: /* panic [0 2] => HALT */
+            printf("panic.\n");
+            abort();
+        default:
+            abort();
+            break;
+    }
+}
+
+void
 w2c_env_nccc_call64(struct w2c_env* env, u32 inptr, u32 outptr){
     uint8_t* inp;
     uint8_t* outp;
@@ -295,6 +316,9 @@ w2c_env_nccc_call64(struct w2c_env* env, u32 inptr, u32 outptr){
     printf("CALL: %ld %ld \n", mod, func);
 
     switch(mod){
+        case 0: /* Admin */
+            mod_admin(&in[1], out);
+            break;
         case 1: /* syncobjects */
             mod_syncobjects(&in[1], out);
             break;
@@ -304,7 +328,6 @@ w2c_env_nccc_call64(struct w2c_env* env, u32 inptr, u32 outptr){
         case 3: /* memory mgr */
             mod_memorymgr(&in[1], out);
             break;
-        case 0: /* Admin */
         case 4: /* timer */
         case 5: /* context */
         default:
