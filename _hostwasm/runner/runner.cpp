@@ -2,6 +2,7 @@
 #include <stdint.h>
 #include <stdlib.h>
 #include "lin.h"
+#include "mplite.h"
 
 #include <thread>
 #include <mutex>
@@ -231,6 +232,48 @@ mod_threads(uint64_t* in, uint64_t* out){
     }
 }
 
+uintptr_t mpool_offset;
+mplite_t mpool;
+std::mutex mtxpool;
+
+static int
+pool_acquire(void* bogus){
+    (void) bogus;
+    mtxpool.lock();
+    return 0;
+}
+
+static int
+pool_release(void* bogus){
+    (void) bogus;
+    mtxpool.unlock();
+    return 0;
+}
+const mplite_lock_t mpool_lockimpl = {
+    .arg = 0,
+    .acquire = pool_acquire,
+    .release = pool_release,
+};
+
+void
+mod_memorymgr(uint64_t* in, uint64_t* out){
+    uintptr_t ptr;
+    switch(in[0]){
+        case 1: /* mem_alloc [3 1 size] => [ptr32] */
+            ptr = (uintptr_t)mplite_malloc(&mpool, in[1]);
+            out[0] = ptr - mpool_offset;
+            printf("malloc: %p (offs: %p) %ld\n", ptr, out[0], in[1]);
+            break;
+        case 2: /* mem_free [3 2 ptr32] => [] */
+            ptr = in[1] + mpool_offset;
+            mplite_free(&mpool, (void*)ptr);
+            break;
+        default:
+            abort();
+            break;
+    }
+}
+
 void
 w2c_env_nccc_call64(struct w2c_env* env, u32 inptr, u32 outptr){
     uint8_t* inp;
@@ -258,8 +301,10 @@ w2c_env_nccc_call64(struct w2c_env* env, u32 inptr, u32 outptr){
         case 2: /* threads */
             mod_threads(&in[1], out);
             break;
-        case 0: /* Admin */
         case 3: /* memory mgr */
+            mod_memorymgr(&in[1], out);
+            break;
+        case 0: /* Admin */
         case 4: /* timer */
         case 5: /* context */
         default:
@@ -272,6 +317,11 @@ w2c_env_nccc_call64(struct w2c_env* env, u32 inptr, u32 outptr){
 int
 main(int ac, char** av){
     int i;
+    wasm_rt_memory_t* mem;
+    uint64_t startpages;
+    uint64_t maxpages;
+
+    /* Init objtbl */
     for(i=0;i!=MAX_HOSTOBJ;i++){
         objtbl[i].id = i;
         objtbl[i].type = OBJTYPE_FREE;
@@ -279,6 +329,19 @@ main(int ac, char** av){
     objtbl[0].type = OBJTYPE_DUMMY; /* Avoid 0 idx */
     wasm_rt_init();
     wasm2c_lin_instantiate(&the_linux, 0);
+
+    /* Init memory pool */
+    mem = w2c_lin_memory(&the_linux);
+    startpages = wasm_rt_grow_memory(mem, 4096 * 4);
+    maxpages = startpages + 4096 * 4;
+
+    printf("memmgr region = ptr: %p pages: %ld - %ld\n", mem->data, 
+           startpages, maxpages);
+
+    mpool_offset = startpages * 64 * 1024;
+    mplite_init(&mpool, mem->data + mpool_offset,
+                (maxpages - startpages) * 64 * 1024,
+                64, &mpool_lockimpl);
     
     w2c_lin_init(&the_linux);
     return 0;
