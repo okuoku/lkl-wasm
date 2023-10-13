@@ -88,5 +88,5 @@ void* lklhost_getops(void);
 
 void init(void){
     lkl_init(lklhost_getops());
-    lkl_start_kernel(""); // FIXME
+    lkl_start_kernel("mem=64M"); // FIXME
 }
