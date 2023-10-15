@@ -6,6 +6,7 @@
 
 #include <thread>
 #include <mutex>
+#include <condition_variable>
 #include <semaphore>
 
 w2c_lin the_linux;
@@ -17,6 +18,7 @@ enum objtype{
     OBJTYPE_MUTEX = 3,
     OBJTYPE_RECURSIVE_MUTEX = 4,
     OBJTYPE_THREAD = 5,
+    OBJTYPE_TIMER = 6
 };
 
 struct hostobj_s {
@@ -32,6 +34,15 @@ struct hostobj_s {
             uintptr_t ret;
             std::thread* thread;
         } thr;
+        struct {
+            uint64_t wait_for;
+            uintptr_t func32;
+            uintptr_t arg32;
+            std::condition_variable* cv;
+            std::mutex* mtx;
+            std::thread* thread;
+            int running;
+        } timer;
     } obj;
 };
 
@@ -295,6 +306,110 @@ mod_admin(uint64_t* in, uint64_t* out){
     }
 }
 
+static uint64_t
+current_ns(void){
+    std::chrono::nanoseconds ns;
+    ns = std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::system_clock::now().time_since_epoch());
+    return ns.count();
+}
+
+static void
+thr_timer(int objid){
+    funcptr f;
+    uint32_t arg32;
+    uint32_t ret;
+    uint64_t wait_for;
+    std::mutex* mtx;
+    std::condition_variable* cv;
+
+    f = getfunc(objtbl[objid].obj.timer.func32);
+    arg32 = objtbl[objid].obj.timer.arg32;
+
+    cv = objtbl[objid].obj.timer.cv;
+    mtx = objtbl[objid].obj.timer.mtx;
+
+    for(;;){
+        std::unique_lock<std::mutex> NN(*mtx);
+        objtbl[objid].obj.timer.running = 0;
+        cv->wait(NN);
+        wait_for = objtbl[objid].obj.timer.wait_for;
+        if(wait_for == UINT64_MAX){
+            /* Dispose timer */
+            break;
+        }else{
+            /* wait and fire */
+            objtbl[objid].obj.timer.running = 1;
+            NN.unlock();
+            std::this_thread::sleep_for(std::chrono::nanoseconds(wait_for));
+            ret = f(&the_linux, arg32);
+        }
+    }
+
+    delete mtx;
+    delete cv;
+    delobj(objid);
+    return;
+}
+
+static void
+mod_timer(uint64_t* in, uint64_t* out){
+    int idx;
+    uint64_t delta;
+    switch(in[0]){
+
+        case 1: /* time [4 1] => [time64] */
+            out[0] = current_ns();
+            break;
+        case 2: /* timer_alloc [4 2 func32 arg32] => [timer32] */
+            idx = newobj(OBJTYPE_TIMER);
+            objtbl[idx].obj.timer.func32 = in[1];
+            objtbl[idx].obj.timer.arg32 = in[2];
+            objtbl[idx].obj.timer.thread = new std::thread(thr_timer, idx);
+            objtbl[idx].obj.timer.mtx = new std::mutex();
+            objtbl[idx].obj.timer.cv = new std::condition_variable();
+            objtbl[idx].obj.timer.wait_for = UINT64_MAX-1;
+            objtbl[idx].obj.timer.running = 0;
+            objtbl[idx].obj.timer.thread->detach();
+            out[0] = idx;
+            break;
+        case 3: /* timer_set_oneshot [4 3 timer32 delta64] => [res] */
+            idx = in[1];
+            if(objtbl[idx].type != OBJTYPE_TIMER){
+                abort();
+            }
+            printf("Oneshot timer: %d %ld\n",idx, in[2]);
+            {
+                std::unique_lock<std::mutex> NN(*objtbl[idx].obj.timer.mtx);
+                if(objtbl[idx].obj.timer.running){
+                    printf("BUG BUG: Trying to wakeup multiple times.\n");
+                    abort();
+                }
+                objtbl[idx].obj.timer.wait_for = in[2];
+                objtbl[idx].obj.timer.cv->notify_one();
+            }
+            out[0] = 0;
+            break;
+        case 4: /* timer_free [4 4 timer32] => [] */
+            idx = in[1];
+            if(objtbl[idx].type != OBJTYPE_TIMER){
+                abort();
+            }
+            {
+                std::unique_lock<std::mutex> NN(*objtbl[idx].obj.timer.mtx);
+                if(objtbl[idx].obj.timer.running){
+                    printf("BUG BUG: Trying to dispose running timer.\n");
+                    abort();
+                }
+                objtbl[idx].obj.timer.wait_for = UINT64_MAX;
+                objtbl[idx].obj.timer.cv->notify_one();
+            }
+            break;
+        default:
+            abort();
+            break;
+    }
+}
+
 void
 w2c_env_nccc_call64(struct w2c_env* env, u32 inptr, u32 outptr){
     uint8_t* inp;
@@ -329,10 +444,12 @@ w2c_env_nccc_call64(struct w2c_env* env, u32 inptr, u32 outptr){
             mod_memorymgr(&in[1], out);
             break;
         case 4: /* timer */
+            mod_timer(&in[1], out);
+            break;
         case 5: /* context */
         default:
             printf("Unknown request.\n");
-            exit(-1);
+            abort();
             return;
     }
 }
