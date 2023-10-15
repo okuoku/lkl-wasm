@@ -10,6 +10,30 @@
 #include <semaphore>
 
 w2c_lin the_linux;
+thread_local w2c_lin* my_linux;
+
+std::mutex instancemtx;
+static void
+newinstance(){
+    wasm_rt_memory_t* mem;
+    w2c_lin* me;
+    uint64_t currentpages;
+    const uint64_t STACK_SIZE = 10 * (16*1024);
+    std::lock_guard<std::mutex> NN(instancemtx);
+
+    /* Allocate thread stack (10 pages = 160KiB) */
+    // FIXME: Insert guard page
+    // FIXME: Leaks stack memory and instance
+    mem = w2c_lin_memory(&the_linux);
+    currentpages = wasm_rt_grow_memory(mem, 10);
+
+    me = (w2c_lin*)malloc(sizeof(w2c_lin));
+    memcpy(me, &the_linux, sizeof(w2c_lin));
+    me->w2c_0x5F_stack_pointer = currentpages * (16 * 1024) - STACK_SIZE;
+
+    my_linux = me;
+}
+
 
 enum objtype{
     OBJTYPE_DUMMY = 0,
@@ -166,9 +190,10 @@ static uintptr_t
 thr_trampoline(int objid){
     funcptr f;
     uint32_t ret;
+    newinstance();
     my_thread_objid = objid;
     f = getfunc(objtbl[objid].obj.thr.func32);
-    ret = f(&the_linux, objtbl[objid].obj.thr.arg32);
+    ret = f(my_linux, objtbl[objid].obj.thr.arg32);
     objtbl[objid].obj.thr.ret = ret;
     return ret; /* debug */
 }
@@ -322,6 +347,8 @@ thr_timer(int objid){
     std::mutex* mtx;
     std::condition_variable* cv;
 
+    newinstance();
+
     f = getfunc(objtbl[objid].obj.timer.func32);
     arg32 = objtbl[objid].obj.timer.arg32;
 
@@ -341,13 +368,14 @@ thr_timer(int objid){
             objtbl[objid].obj.timer.running = 1;
             NN.unlock();
             std::this_thread::sleep_for(std::chrono::nanoseconds(wait_for));
-            ret = f(&the_linux, arg32);
+            ret = f(my_linux, arg32);
         }
     }
 
     delete mtx;
     delete cv;
     delobj(objid);
+    // FIXME: Free instance
     return;
 }
 
@@ -469,6 +497,9 @@ main(int ac, char** av){
     objtbl[0].type = OBJTYPE_DUMMY; /* Avoid 0 idx */
     wasm_rt_init();
     wasm2c_lin_instantiate(&the_linux, 0);
+    
+    /* Allocate initial thread */
+    my_linux = &the_linux;
 
     /* Init memory pool */
     mem = w2c_lin_memory(&the_linux);
