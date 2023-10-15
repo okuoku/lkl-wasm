@@ -8,8 +8,6 @@ DUMMYSYM(__start___param);
 DUMMYSYM(__stop___param);
 DUMMYSYM(__con_initcall_end);
 DUMMYSYM(__con_initcall_start);
-DUMMYSYM(__sched_class_highest);
-DUMMYSYM(__sched_class_lowest);
 
 /* address marks */
 DUMMYSYM(__start___ex_table);
@@ -51,7 +49,6 @@ DUMMYSYM(__start_pci_fixups_suspend);
 DUMMYSYM(__end_pci_fixups_suspend);
 DUMMYSYM(__start_pci_fixups_suspend_late);
 DUMMYSYM(__end_pci_fixups_suspend_late);
-
 
 extern char* __attribute((alias ("dummy_page"))) init_thread_union;
 extern char* __attribute((alias ("dummy_page"))) init_stack;
@@ -98,8 +95,10 @@ void lkl_bug(const char* fmt, ...){
 void* lklhost_getops(void);
 
 void host_lkl_inittbl(void); // generated
+void host_lkl_initschedclasses(void);
 
 void init(void){
+    host_lkl_initschedclasses();
     host_lkl_inittbl();
     lkl_init(lklhost_getops());
     lkl_start_kernel("mem=64M"); // FIXME

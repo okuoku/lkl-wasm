@@ -333,7 +333,12 @@ static u64 __calc_delta(u64 delta_exec, unsigned long weight, struct load_weight
 }
 
 
+#ifdef __wasm__
+const struct sched_class fair_sched_class_temp;
+extern struct sched_class fair_sched_class;
+#else
 const struct sched_class fair_sched_class;
+#endif
 
 /**************************************************************
  * CFS operations on generic schedulable entities:

@@ -2228,10 +2228,18 @@ static inline void set_next_task(struct rq *rq, struct task_struct *next)
  *
  * Also enforce alignment on the instance, not the type, to guarantee layout.
  */
+
+#ifdef __wasm__
+#define DEFINE_SCHED_CLASS(name) \
+const struct sched_class name##_sched_class_temp \
+	__aligned(__alignof__(struct sched_class)) \
+	__section("__" #name "_sched_class")
+#else
 #define DEFINE_SCHED_CLASS(name) \
 const struct sched_class name##_sched_class \
 	__aligned(__alignof__(struct sched_class)) \
 	__section("__" #name "_sched_class")
+#endif
 
 /* Defined in include/asm-generic/vmlinux.lds.h */
 extern struct sched_class __sched_class_highest[];
@@ -2245,11 +2253,19 @@ extern struct sched_class __sched_class_lowest[];
 
 #define sched_class_above(_a, _b)	((_a) < (_b))
 
+#ifdef __wasm__
+extern struct sched_class stop_sched_class;
+extern struct sched_class dl_sched_class;
+extern struct sched_class rt_sched_class;
+extern struct sched_class fair_sched_class;
+extern struct sched_class idle_sched_class;
+#else
 extern const struct sched_class stop_sched_class;
 extern const struct sched_class dl_sched_class;
 extern const struct sched_class rt_sched_class;
 extern const struct sched_class fair_sched_class;
 extern const struct sched_class idle_sched_class;
+#endif
 
 static inline bool sched_stop_runnable(struct rq *rq)
 {
