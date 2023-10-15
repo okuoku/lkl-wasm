@@ -245,8 +245,13 @@ extern bool initcall_debug;
 	    ".previous					\n");	\
 	static_assert(__same_type(initcall_t, &fn));
 #else
+#ifdef __wasm__
+#define __wasm_export 
+#else
+#define __wasm_export static
+#endif
 #define ____define_initcall(fn, __unused, __name, __sec)	\
-	static initcall_t __name __used 			\
+	__wasm_export initcall_t __name __used 			\
 		__attribute__((__section__(__sec))) = fn;
 #endif
 

@@ -2,16 +2,6 @@ static char dummy_page[64*1024];
 #define DUMMYSYM(x) const void* x = dummy_page
 
 /* tables */
-DUMMYSYM(__initcall0_start);
-DUMMYSYM(__initcall1_start);
-DUMMYSYM(__initcall2_start);
-DUMMYSYM(__initcall3_start);
-DUMMYSYM(__initcall4_start);
-DUMMYSYM(__initcall5_start);
-DUMMYSYM(__initcall6_start);
-DUMMYSYM(__initcall7_start);
-DUMMYSYM(__initcall_end);
-DUMMYSYM(__initcall_start);
 DUMMYSYM(__setup_end);
 DUMMYSYM(__setup_start);
 DUMMYSYM(__start___param);
@@ -41,6 +31,27 @@ DUMMYSYM(__irqentry_text_end);
 DUMMYSYM(__irqentry_text_start);
 DUMMYSYM(__softirqentry_text_end);
 DUMMYSYM(__softirqentry_text_start);
+
+/* Additional address marks */
+DUMMYSYM(__start___modver);
+DUMMYSYM(__stop___modver);
+DUMMYSYM(__start_pci_fixups_early);
+DUMMYSYM(__end_pci_fixups_early);
+DUMMYSYM(__start_pci_fixups_header);
+DUMMYSYM(__end_pci_fixups_header);
+DUMMYSYM(__start_pci_fixups_final);
+DUMMYSYM(__end_pci_fixups_final);
+DUMMYSYM(__start_pci_fixups_enable);
+DUMMYSYM(__end_pci_fixups_enable);
+DUMMYSYM(__start_pci_fixups_resume);
+DUMMYSYM(__end_pci_fixups_resume);
+DUMMYSYM(__start_pci_fixups_resume_early);
+DUMMYSYM(__end_pci_fixups_resume_early);
+DUMMYSYM(__start_pci_fixups_suspend);
+DUMMYSYM(__end_pci_fixups_suspend);
+DUMMYSYM(__start_pci_fixups_suspend_late);
+DUMMYSYM(__end_pci_fixups_suspend_late);
+
 
 extern char* __attribute((alias ("dummy_page"))) init_thread_union;
 extern char* __attribute((alias ("dummy_page"))) init_stack;
@@ -86,7 +97,10 @@ void lkl_bug(const char* fmt, ...){
 
 void* lklhost_getops(void);
 
+void host_lkl_inittbl(void); // generated
+
 void init(void){
+    host_lkl_inittbl();
     lkl_init(lklhost_getops());
     lkl_start_kernel("mem=64M"); // FIXME
 }

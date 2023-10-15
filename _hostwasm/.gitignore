@@ -2,3 +2,4 @@ lin.c
 lin.h
 lin.map
 lin.wasm
+initsyms.gen.c
