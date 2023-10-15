@@ -52,6 +52,8 @@ DUMMYSYM(__end_pci_fixups_suspend_late);
 
 extern char* __attribute((alias ("dummy_page"))) init_thread_union;
 extern char* __attribute((alias ("dummy_page"))) init_stack;
+struct threadinfo;
+extern struct threadinfo init_thread_info;
 
 int lkl_init(void* ops);
 int lkl_start_kernel(const char* fmt, ...);
@@ -97,7 +99,13 @@ void* lklhost_getops(void);
 void host_lkl_inittbl(void); // generated
 void host_lkl_initschedclasses(void);
 
+static void
+copy_init_thread_info(void){
+    memcpy(dummy_page, &init_thread_info, 0x220);
+}
+
 void init(void){
+    copy_init_thread_info();
     host_lkl_initschedclasses();
     host_lkl_inittbl();
     lkl_init(lklhost_getops());
