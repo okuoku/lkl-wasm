@@ -12,24 +12,39 @@
 w2c_lin the_linux;
 thread_local w2c_lin* my_linux;
 
+const uint64_t WASM_PAGE_SIZE = (64*1024);
+
 std::mutex instancemtx;
 static void
 newinstance(){
     wasm_rt_memory_t* mem;
+    wasm_rt_funcref_t* newfuncref;
+    uint32_t i;
     w2c_lin* me;
     uint64_t currentpages;
-    const uint64_t STACK_SIZE = 10 * (16*1024);
+    const uint64_t STACK_PAGES = 10;
+    const uint64_t STACK_SIZE = STACK_PAGES * WASM_PAGE_SIZE;
     std::lock_guard<std::mutex> NN(instancemtx);
 
     /* Allocate thread stack (10 pages = 160KiB) */
     // FIXME: Insert guard page
     // FIXME: Leaks stack memory and instance
     mem = w2c_lin_memory(&the_linux);
-    currentpages = wasm_rt_grow_memory(mem, 10);
+    currentpages = wasm_rt_grow_memory(mem, STACK_PAGES);
 
+    /* Allocate new instance */
     me = (w2c_lin*)malloc(sizeof(w2c_lin));
+    newfuncref = (wasm_rt_funcref_t*)malloc(sizeof(wasm_rt_funcref_t)*the_linux.w2c_T0.size);
+    memcpy(newfuncref, the_linux.w2c_T0.data, sizeof(wasm_rt_funcref_t)*the_linux.w2c_T0.size);
+    for(i=0;i!=the_linux.w2c_T0.size;i++){
+        newfuncref[i].module_instance = me;
+    }
+
     memcpy(me, &the_linux, sizeof(w2c_lin));
-    me->w2c_0x5F_stack_pointer = currentpages * (16 * 1024) - STACK_SIZE;
+    me->w2c_0x5F_stack_pointer = (currentpages + STACK_PAGES) * WASM_PAGE_SIZE - STACK_SIZE + 256 /* Red zone + 128(unused) */;
+    me->w2c_T0.max_size = me->w2c_T0.size;
+    me->w2c_T0.data = newfuncref;
+    printf("New stack pointer = %d\n", me->w2c_0x5F_stack_pointer);
 
     my_linux = me;
 }
