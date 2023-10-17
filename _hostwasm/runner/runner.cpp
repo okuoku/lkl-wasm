@@ -44,7 +44,7 @@ newinstance(){
     me->w2c_0x5F_stack_pointer = (currentpages + STACK_PAGES) * WASM_PAGE_SIZE - STACK_SIZE + 256 /* Red zone + 128(unused) */;
     me->w2c_T0.max_size = me->w2c_T0.size;
     me->w2c_T0.data = newfuncref;
-    printf("New stack pointer = %d\n", me->w2c_0x5F_stack_pointer);
+    //printf("New stack pointer = %d\n", me->w2c_0x5F_stack_pointer);
 
     my_linux = me;
 }
@@ -192,25 +192,121 @@ typedef uint32_t (*funcptr)(w2c_lin*, uint32_t);
 static funcptr
 getfunc(int idx){
     void* p;
-    printf("Converting %d ...", idx);
+    //printf("Converting %d ...", idx);
     if(idx >= the_linux.w2c_T0.size){
         abort();
     }
     p = (void*)the_linux.w2c_T0.data[idx].func;
-    printf(" %p\n", p);
+    //printf(" %p\n", p);
     return (funcptr)p;
 }
+
+
+#define MAX_MYTLS 128
+
+struct {
+    uint32_t func32_destructor;
+    int used;
+} tlsstate[MAX_MYTLS];
+
+std::mutex tlsidmtx;
+thread_local uint32_t mytls[MAX_MYTLS];
+
+static uint32_t /* Key */
+thr_tls_alloc(uint32_t destructor){
+    std::lock_guard<std::mutex> NN(tlsidmtx);
+    int i;
+    for(i=0;i!=MAX_MYTLS;i++){
+        if(tlsstate[i].used == 0){
+            tlsstate[i].used = 1;
+            tlsstate[i].func32_destructor = destructor;
+            return i;
+        }
+    }
+    abort();
+    return 0; /* unreachable */
+}
+
+static void
+thr_tls_free(uint32_t key){
+    std::lock_guard<std::mutex> NN(tlsidmtx);
+    if(key > MAX_MYTLS){
+        abort();
+    }
+    tlsstate[key].used = 0;
+}
+
+static uint32_t
+thr_tls_get(uint32_t key){
+    if(key > MAX_MYTLS){
+        abort();
+    }
+    return mytls[key];
+}
+
+static uint32_t
+thr_tls_set(uint32_t key, uint32_t data){
+    if(key > MAX_MYTLS){
+        abort();
+    }
+    mytls[key] = data;
+    return 0;
+}
+
+static void
+thr_tls_cleanup(void){
+    int i,runloop;
+    funcptr f;
+    runloop = 1;
+    while(runloop){
+        runloop = 0;
+        for(i=0;i!=MAX_MYTLS;i++){
+            if(mytls[i] != 0){
+                std::lock_guard<std::mutex> NN(tlsidmtx);
+                uint32_t funcid;
+                funcid = tlsstate[i].func32_destructor;
+                if(funcid != 0){
+                    f = getfunc(objtbl[funcid].obj.thr.func32);
+                    (void)f(my_linux, mytls[i]);
+                    mytls[i] = 0;
+                    runloop = 1;
+                }
+            }
+        }
+    }
+}
+
+class thr_exit {};
 
 static uintptr_t
 thr_trampoline(int objid){
     funcptr f;
     uint32_t ret;
-    newinstance();
-    my_thread_objid = objid;
-    f = getfunc(objtbl[objid].obj.thr.func32);
-    ret = f(my_linux, objtbl[objid].obj.thr.arg32);
-    objtbl[objid].obj.thr.ret = ret;
+    try {
+        newinstance();
+        memset(mytls, 0, sizeof(mytls));
+        my_thread_objid = objid;
+        f = getfunc(objtbl[objid].obj.thr.func32);
+        ret = f(my_linux, objtbl[objid].obj.thr.arg32);
+        thr_tls_cleanup();
+        objtbl[objid].obj.thr.ret = ret;
+    } catch (thr_exit &req) {
+        printf("Exiting thread.\n");
+        thr_tls_cleanup();
+    }
     return ret; /* debug */
+}
+
+static void
+prepare_newthread(void){
+    int idx;
+    /* Allocate initial thread */
+    memset(mytls, 0, sizeof(mytls));
+    idx = newobj(OBJTYPE_THREAD);
+    objtbl[idx].obj.thr.func32 = 0;
+    objtbl[idx].obj.thr.arg32 = 0;
+    objtbl[idx].obj.thr.thread = nullptr;
+    my_thread_objid = idx;
 }
 
 static void
@@ -237,8 +333,10 @@ mod_threads(uint64_t* in, uint64_t* out){
             if(objtbl[idx].type != OBJTYPE_THREAD){
                 abort();
             }
-            printf("UNIMPL.\n");
-            abort();
+            {
+                thr_exit e;
+                throw e;
+            }
             break;
         case 4: /* thread_join [2 4 thr32] => [result] */
             idx = in[1];
@@ -274,9 +372,17 @@ mod_threads(uint64_t* in, uint64_t* out){
             out[0] = idx;
             break;
         case 8: /* tls_alloc [2 8 func32] => [tlskey32] */
+            out[0] = thr_tls_alloc(in[1]);
+            break;
         case 9: /* tls_free [2 9 tlskey32] => [] */
+            thr_tls_free(in[1]);
+            break;
         case 10: /* tls_set [2 10 tlskey32 ptr32] => [res] */
+            out[0] = thr_tls_set(in[1], in[2]);
+            break;
         case 11: /* tls_get [2 11 tlskey32] => [ptr32] */
+            out[1] = thr_tls_get(in[1]);
+            break;
         default:
             abort();
             break;
@@ -363,6 +469,7 @@ thr_timer(int objid){
     std::condition_variable* cv;
 
     newinstance();
+    prepare_newthread();
 
     f = getfunc(objtbl[objid].obj.timer.func32);
     arg32 = objtbl[objid].obj.timer.arg32;
@@ -470,8 +577,7 @@ w2c_env_nccc_call64(struct w2c_env* env, u32 inptr, u32 outptr){
 
     mod = in[0];
     func = in[1];
-
-    printf("CALL: %ld %ld \n", mod, func);
+    //printf("CALL: %ld %ld \n", mod, func);
 
     switch(mod){
         case 0: /* Admin */
@@ -491,7 +597,7 @@ w2c_env_nccc_call64(struct w2c_env* env, u32 inptr, u32 outptr){
             break;
         case 5: /* context */
         default:
-            printf("Unknown request.\n");
+            printf("Unkown request: %ld %ld \n", mod, func);
             abort();
             return;
     }
@@ -500,6 +606,7 @@ w2c_env_nccc_call64(struct w2c_env* env, u32 inptr, u32 outptr){
 int
 main(int ac, char** av){
     int i;
+    int idx;
     wasm_rt_memory_t* mem;
     uint64_t startpages;
     uint64_t maxpages;
@@ -512,9 +619,14 @@ main(int ac, char** av){
     objtbl[0].type = OBJTYPE_DUMMY; /* Avoid 0 idx */
     wasm_rt_init();
     wasm2c_lin_instantiate(&the_linux, 0);
+
+    /* Init TLS slots */
+    for(i=0;i!=MAX_MYTLS;i++){
+        tlsstate[i] = { 0 };
+    }
     
-    /* Allocate initial thread */
     my_linux = &the_linux;
+    prepare_newthread();
 
     /* Init memory pool */
     mem = w2c_lin_memory(&the_linux);
