@@ -477,23 +477,34 @@ thr_timer(int objid){
     cv = objtbl[objid].obj.timer.cv;
     mtx = objtbl[objid].obj.timer.mtx;
 
-    for(;;){
+    {
         std::unique_lock<std::mutex> NN(*mtx);
-        objtbl[objid].obj.timer.running = 0;
-        cv->wait(NN);
-        wait_for = objtbl[objid].obj.timer.wait_for;
-        if(wait_for == UINT64_MAX){
-            /* Dispose timer */
-            break;
-        }else{
-            /* wait and fire */
-            objtbl[objid].obj.timer.running = 1;
-            NN.unlock();
-            std::this_thread::sleep_for(std::chrono::nanoseconds(wait_for));
-            ret = f(my_linux, arg32);
+        for(;;){
+            wait_for = objtbl[objid].obj.timer.wait_for;
+            objtbl[objid].obj.timer.wait_for = UINT64_MAX-1;
+            if(wait_for == UINT64_MAX){
+                /* Dispose timer */
+                break;
+            }else if(wait_for == (UINT64_MAX-1)){
+                /* No request at this time. */
+                cv->wait(NN);
+            }else{
+                /* wait and fire */
+                printf("Wait: %ld\n",wait_for);
+                if(std::cv_status::timeout == cv->wait_for(NN, std::chrono::nanoseconds(wait_for))){
+                    printf("Fire: %d\n",objtbl[objid].obj.timer.func32);
+                    mtx->unlock();
+                    ret = f(my_linux, arg32);
+                    mtx->lock();
+                    printf("Done: %d\n",objtbl[objid].obj.timer.func32);
+                }else{
+                    printf("Rearm: %d\n", objtbl[objid].obj.timer.wait_for);
+                }
+            }
         }
     }
 
+    printf("Dispose timer %d\n", objid);
     delete mtx;
     delete cv;
     delobj(objid);
@@ -528,12 +539,11 @@ mod_timer(uint64_t* in, uint64_t* out){
                 abort();
             }
             printf("Oneshot timer: %d %ld\n",idx, in[2]);
+            if(in[2] == 4294967295){
+                abort();
+            }
             {
                 std::unique_lock<std::mutex> NN(*objtbl[idx].obj.timer.mtx);
-                if(objtbl[idx].obj.timer.running){
-                    printf("BUG BUG: Trying to wakeup multiple times.\n");
-                    abort();
-                }
                 objtbl[idx].obj.timer.wait_for = in[2];
                 objtbl[idx].obj.timer.cv->notify_one();
             }
@@ -546,10 +556,6 @@ mod_timer(uint64_t* in, uint64_t* out){
             }
             {
                 std::unique_lock<std::mutex> NN(*objtbl[idx].obj.timer.mtx);
-                if(objtbl[idx].obj.timer.running){
-                    printf("BUG BUG: Trying to dispose running timer.\n");
-                    abort();
-                }
                 objtbl[idx].obj.timer.wait_for = UINT64_MAX;
                 objtbl[idx].obj.timer.cv->notify_one();
             }
