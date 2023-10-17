@@ -1,5 +1,6 @@
 static char dummy_page[64*1024];
-#define DUMMYSYM(x) const void* x = dummy_page
+//#define DUMMYSYM(x) const void* x = dummy_page
+#define DUMMYSYM(x) extern const void* __attribute__((alias("dummy_page"))) x
 
 /* tables */
 DUMMYSYM(__setup_end);
