@@ -412,18 +412,37 @@ const mplite_lock_t mpool_lockimpl = {
     .release = pool_release,
 };
 
+void*
+pool_alloc(uintptr_t size){
+    return mplite_malloc(&mpool, size);
+}
+
+void
+pool_free(void* ptr){
+    mplite_free(&mpool, ptr);
+}
+
+uint32_t
+pool_lklptr(void* ptr){
+    return (uintptr_t)ptr - mpool_offset;
+}
+
+void*
+pool_hostptr(uint32_t offs){
+    return (void*)(uintptr_t)((uintptr_t)offs + mpool_offset);
+}
+
 void
 mod_memorymgr(uint64_t* in, uint64_t* out){
-    uintptr_t ptr;
+    void* ptr;
     switch(in[0]){
         case 1: /* mem_alloc [3 1 size] => [ptr32] */
-            ptr = (uintptr_t)mplite_malloc(&mpool, in[1]);
-            out[0] = ptr - mpool_offset;
+            ptr = pool_alloc(in[1]);
+            out[0] = pool_lklptr(ptr);
             printf("malloc: %p (offs: %p) %ld\n", ptr, out[0], in[1]);
             break;
         case 2: /* mem_free [3 2 ptr32] => [] */
-            ptr = in[1] + mpool_offset;
-            mplite_free(&mpool, (void*)ptr);
+            pool_free(pool_hostptr(in[1]));
             break;
         default:
             abort();
