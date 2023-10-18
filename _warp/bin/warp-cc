@@ -1,2 +1,2 @@
 #!/bin/bash
-exec clang --target=wasm32 -ffreestanding $*
+exec clang --target=wasm32 -ffreestanding -Xclang -target-feature -Xclang +atomics $*
