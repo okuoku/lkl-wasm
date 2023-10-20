@@ -1,3 +1,4 @@
+#include <stdint.h>
 static char dummy_page[64*1024];
 //#define DUMMYSYM(x) const void* x = dummy_page
 #define DUMMYSYM(x) extern const void* __attribute__((alias("dummy_page"))) x
@@ -58,6 +59,7 @@ extern struct threadinfo init_thread_info;
 
 int lkl_init(void* ops);
 int lkl_start_kernel(const char* fmt, ...);
+long lkl_syscall(long no, long *params);
 
 typedef unsigned long size_t;
 
@@ -105,7 +107,13 @@ copy_init_thread_info(void){
     memcpy(dummy_page, &init_thread_info, 0x220);
 }
 
-void init(void){
+uint32_t __attribute__((export_name ("syscall"))) 
+syscall(uint32_t no, uint32_t* in){
+    return lkl_syscall(no, (long*)in);
+}
+
+void __attribute__((export_name ("init"))) 
+init(void){
     copy_init_thread_info();
     host_lkl_initschedclasses();
     host_lkl_inittbl();

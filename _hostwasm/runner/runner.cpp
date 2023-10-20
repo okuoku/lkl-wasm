@@ -9,12 +9,7 @@
 #include <condition_variable>
 #include <semaphore>
 
-typedef w2c_0x24lin0x2Ewasm w2c_kernel;
-
 w2c_kernel the_linux;
-#define w2c_kernel_init w2c_0x24lin0x2Ewasm_init
-#define wasm2c_kernel_instantiate wasm2c_0x24lin0x2Ewasm_instantiate
-
 thread_local w2c_kernel* my_linux;
 
 const uint64_t WASM_PAGE_SIZE = (64*1024);
@@ -631,6 +626,11 @@ w2c_env_nccc_call64(struct w2c_env* env, u32 inptr, u32 outptr){
             abort();
             return;
     }
+}
+
+uint32_t /* -errno */
+runsyscall32(uint32_t no, uint32_t in){
+    return w2c_kernel_syscall(my_linux, no, in);
 }
 
 int
