@@ -9,8 +9,13 @@
 #include <condition_variable>
 #include <semaphore>
 
-w2c_lin the_linux;
-thread_local w2c_lin* my_linux;
+typedef w2c_0x24lin0x2Ewasm w2c_kernel;
+
+w2c_kernel the_linux;
+#define w2c_kernel_init w2c_0x24lin0x2Ewasm_init
+#define wasm2c_kernel_instantiate wasm2c_0x24lin0x2Ewasm_instantiate
+
+thread_local w2c_kernel* my_linux;
 
 const uint64_t WASM_PAGE_SIZE = (64*1024);
 
@@ -20,7 +25,7 @@ newinstance(){
     wasm_rt_memory_t* mem;
     wasm_rt_funcref_t* newfuncref;
     uint32_t i;
-    w2c_lin* me;
+    w2c_kernel* me;
     uint64_t currentpages;
     const uint64_t STACK_PAGES = 10;
     const uint64_t STACK_SIZE = STACK_PAGES * WASM_PAGE_SIZE;
@@ -29,18 +34,18 @@ newinstance(){
     /* Allocate thread stack (10 pages = 160KiB) */
     // FIXME: Insert guard page
     // FIXME: Leaks stack memory and instance
-    mem = w2c_lin_memory(&the_linux);
+    mem = &the_linux.w2c_memory;
     currentpages = wasm_rt_grow_memory(mem, STACK_PAGES);
 
     /* Allocate new instance */
-    me = (w2c_lin*)malloc(sizeof(w2c_lin));
+    me = (w2c_kernel*)malloc(sizeof(w2c_kernel));
     newfuncref = (wasm_rt_funcref_t*)malloc(sizeof(wasm_rt_funcref_t)*the_linux.w2c_T0.size);
     memcpy(newfuncref, the_linux.w2c_T0.data, sizeof(wasm_rt_funcref_t)*the_linux.w2c_T0.size);
     for(i=0;i!=the_linux.w2c_T0.size;i++){
         newfuncref[i].module_instance = me;
     }
 
-    memcpy(me, &the_linux, sizeof(w2c_lin));
+    memcpy(me, &the_linux, sizeof(w2c_kernel));
     me->w2c_0x5F_stack_pointer = (currentpages + STACK_PAGES) * WASM_PAGE_SIZE - STACK_SIZE + 256 /* Red zone + 128(unused) */;
     me->w2c_T0.max_size = me->w2c_T0.size;
     me->w2c_T0.data = newfuncref;
@@ -187,7 +192,7 @@ mod_syncobjects(uint64_t* in, uint64_t* out){
 }
 
 thread_local int my_thread_objid;
-typedef uint32_t (*funcptr)(w2c_lin*, uint32_t);
+typedef uint32_t (*funcptr)(w2c_kernel*, uint32_t);
 
 static funcptr
 getfunc(int idx){
@@ -456,7 +461,7 @@ mod_admin(uint64_t* in, uint64_t* out){
     wasm_rt_memory_t* mem;
     switch(in[0]){
         case 1: /* print [0 1 str len] => [] */
-            mem = w2c_lin_memory(&the_linux);
+            mem = &the_linux.w2c_memory;
             buf = (char*)malloc(in[2] + 1);
             buf[in[2]] = 0;
             memcpy(buf, mem->data + in[1], in[2]);
@@ -593,7 +598,7 @@ w2c_env_nccc_call64(struct w2c_env* env, u32 inptr, u32 outptr){
     uint64_t* out;
     uint64_t mod, func;
     wasm_rt_memory_t* mem;
-    mem = w2c_lin_memory(&the_linux);
+    mem = &the_linux.w2c_memory;
 
     inp = mem->data + inptr;
     outp = mem->data + outptr;
@@ -643,7 +648,7 @@ main(int ac, char** av){
     }
     objtbl[0].type = OBJTYPE_DUMMY; /* Avoid 0 idx */
     wasm_rt_init();
-    wasm2c_lin_instantiate(&the_linux, 0);
+    wasm2c_kernel_instantiate(&the_linux, 0);
 
     /* Init TLS slots */
     for(i=0;i!=MAX_MYTLS;i++){
@@ -654,7 +659,7 @@ main(int ac, char** av){
     prepare_newthread();
 
     /* Init memory pool */
-    mem = w2c_lin_memory(&the_linux);
+    mem = &the_linux.w2c_memory;
     startpages = wasm_rt_grow_memory(mem, 4096 * 4);
     maxpages = startpages + 4096 * 4;
 
@@ -666,6 +671,6 @@ main(int ac, char** av){
                 (maxpages - startpages) * 64 * 1024,
                 64, &mpool_lockimpl);
     
-    w2c_lin_init(&the_linux);
+    w2c_kernel_init(&the_linux);
     return 0;
 }
