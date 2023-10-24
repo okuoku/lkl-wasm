@@ -41,7 +41,7 @@ newinstance(){
     }
 
     memcpy(me, &the_linux, sizeof(w2c_kernel));
-    me->w2c_0x5F_stack_pointer = (currentpages + STACK_PAGES) * WASM_PAGE_SIZE - STACK_SIZE + 256 /* Red zone + 128(unused) */;
+    me->w2c_0x5F_stack_pointer = (currentpages + STACK_PAGES) * WASM_PAGE_SIZE - 256 /* Red zone + 128(unused) */;
     me->w2c_T0.max_size = me->w2c_T0.size;
     me->w2c_T0.data = newfuncref;
     //printf("New stack pointer = %d\n", me->w2c_0x5F_stack_pointer);
