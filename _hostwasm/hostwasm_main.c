@@ -59,7 +59,7 @@ extern struct threadinfo init_thread_info;
 
 int lkl_init(void* ops);
 int lkl_start_kernel(const char* fmt, ...);
-long lkl_syscall(long no, long *params);
+long lkl_syscall(long no, int nargs, long *params);
 
 typedef unsigned long size_t;
 
@@ -108,8 +108,8 @@ copy_init_thread_info(void){
 }
 
 uint32_t __attribute__((export_name ("syscall"))) 
-syscall(uint32_t no, uint32_t* in){
-    return lkl_syscall(no, (long*)in);
+syscall(uint32_t no, uint32_t nargs, uint32_t* in){
+    return lkl_syscall(no, nargs, (long*)in);
 }
 
 void __attribute__((export_name ("init"))) 

@@ -14,6 +14,11 @@ thread_local w2c_kernel* my_linux;
 
 const uint64_t WASM_PAGE_SIZE = (64*1024);
 
+uint32_t /* -errno */
+runsyscall32(uint32_t no, uint32_t nargs, uint32_t in){
+    return w2c_kernel_syscall(my_linux, no, nargs, in);
+}
+
 std::mutex instancemtx;
 static void
 newinstance(){
@@ -188,6 +193,7 @@ mod_syncobjects(uint64_t* in, uint64_t* out){
 
 thread_local int my_thread_objid;
 typedef uint32_t (*funcptr)(w2c_kernel*, uint32_t);
+typedef void (*funcptr_cont)(w2c_kernel*);
 
 static funcptr
 getfunc(int idx){
@@ -199,6 +205,18 @@ getfunc(int idx){
     p = (void*)the_linux.w2c_T0.data[idx].func;
     //printf(" %p\n", p);
     return (funcptr)p;
+}
+
+static funcptr_cont
+getfunc_cont(int idx){
+    void* p;
+    //printf("Converting %d ...", idx);
+    if(idx >= the_linux.w2c_T0.size){
+        abort();
+    }
+    p = (void*)the_linux.w2c_T0.data[idx].func;
+    //printf(" %p\n", p);
+    return (funcptr_cont)p;
 }
 
 
@@ -241,6 +259,7 @@ thr_tls_get(uint32_t key){
     if(key > MAX_MYTLS){
         abort();
     }
+    printf("TLS[%d]: %d -> %x\n",my_thread_objid,key,mytls[key]);
     return mytls[key];
 }
 
@@ -381,7 +400,7 @@ mod_threads(uint64_t* in, uint64_t* out){
             out[0] = thr_tls_set(in[1], in[2]);
             break;
         case 11: /* tls_get [2 11 tlskey32] => [ptr32] */
-            out[1] = thr_tls_get(in[1]);
+            out[0] = thr_tls_get(in[1]);
             break;
         default:
             abort();
@@ -389,7 +408,7 @@ mod_threads(uint64_t* in, uint64_t* out){
     }
 }
 
-uintptr_t mpool_offset;
+uint8_t* mpool_base;
 mplite_t mpool;
 std::mutex mtxpool;
 
@@ -424,12 +443,49 @@ pool_free(void* ptr){
 
 uint32_t
 pool_lklptr(void* ptr){
-    return (uintptr_t)ptr - mpool_offset;
+    return (uintptr_t)((uint8_t*)ptr - mpool_base);
 }
 
 void*
 pool_hostptr(uint32_t offs){
-    return (void*)(uintptr_t)((uintptr_t)offs + mpool_offset);
+    return mpool_base + (uintptr_t)offs;
+}
+
+
+void
+thr_debugiothread(int fd){
+    bool writer_thread = fd == 2 ? true : false;
+
+    /* Allocate linux context */
+    newinstance();
+    prepare_newthread();
+
+    thr_tls_cleanup();
+}
+
+void
+spawn_debugiothread(void){
+    int32_t* buf;
+    uint32_t ptr0, ptr1;
+    int32_t ret;
+    /* Allocate syscall buffer */
+    buf = (int32_t*)pool_alloc(sizeof(int32_t)*32);
+
+    for(int i=0;i!=3;i++){
+        std::thread* thr;
+        /* Generate Pipe inside kernel */
+        ptr0 = pool_lklptr(&buf[0]);
+        ptr1 = pool_lklptr(&buf[2]);
+        buf[0] = ptr1; /* pipefd[2] */
+        buf[1] = 0; /* flags */
+
+        ret = runsyscall32(59 /* pipe2 */, 2, ptr0);
+        printf("Ret: %d, %d, %d\n", ret, buf[2], buf[3]);
+
+        /* Spawn handler */
+        ///thr = new std::thread(thr_debugiothread, i);
+    }
+    pool_free(buf);
 }
 
 void
@@ -585,6 +641,42 @@ mod_timer(uint64_t* in, uint64_t* out){
     }
 }
 
+class guardian {public: uintptr_t ident;};
+
+static void
+mod_ctx(uint64_t* in, uint64_t* out){
+    guardian* gp;
+    uintptr_t* p;
+    funcptr_cont f;
+    switch(in[0]){
+        case 1: /* jmp_buf_set [5 1 ptr32 func32 sizeof_jmpbuf] => [] */
+            gp = new guardian();
+            gp->ident = (uintptr_t)gp;
+            p = (uintptr_t*)pool_hostptr(in[1]);
+            *p = (uintptr_t)(gp);
+            f = getfunc_cont(in[2]);
+            try {
+                printf("Run: %lx %p\n", in[1], gp);
+                f(my_linux);
+            } catch (guardian& gg) {
+                if(gg.ident != (uintptr_t)gp){
+                    throw gg;
+                }else{
+                    delete gp;
+                }
+            }
+            break;
+        case 2: /* jmp_buf_longjmp [5 2 ptr32 val32] => NORETURN */
+            p = (uintptr_t*)pool_hostptr(in[1]);
+            gp = (guardian*)(*p);
+            printf("Throw: %lx %p\n", in[1], gp);
+            throw *gp;
+        default:
+            abort();
+            break;
+    }
+}
+
 void
 w2c_env_nccc_call64(struct w2c_env* env, u32 inptr, u32 outptr){
     uint8_t* inp;
@@ -621,16 +713,13 @@ w2c_env_nccc_call64(struct w2c_env* env, u32 inptr, u32 outptr){
             mod_timer(&in[1], out);
             break;
         case 5: /* context */
+            mod_ctx(&in[1], out);
+            break;
         default:
             printf("Unkown request: %ld %ld \n", mod, func);
             abort();
             return;
     }
-}
-
-uint32_t /* -errno */
-runsyscall32(uint32_t no, uint32_t in){
-    return w2c_kernel_syscall(my_linux, no, in);
 }
 
 int
@@ -640,6 +729,7 @@ main(int ac, char** av){
     wasm_rt_memory_t* mem;
     uint64_t startpages;
     uint64_t maxpages;
+    uint32_t mpool_start;
 
     /* Init objtbl */
     for(i=0;i!=MAX_HOSTOBJ;i++){
@@ -666,11 +756,22 @@ main(int ac, char** av){
     printf("memmgr region = ptr: %p pages: %ld - %ld\n", mem->data, 
            startpages, maxpages);
 
-    mpool_offset = startpages * 64 * 1024;
-    mplite_init(&mpool, mem->data + mpool_offset,
-                (maxpages - startpages) * 64 * 1024,
+    mpool_start = (startpages * WASM_PAGE_SIZE);
+    mpool_base = mem->data;
+    mplite_init(&mpool, mem->data + mpool_start,
+                (maxpages - startpages) * WASM_PAGE_SIZE,
                 64, &mpool_lockimpl);
     
+    /* Initialize kernel */
     w2c_kernel_init(&the_linux);
+
+    /* Create debug I/O thread */
+    spawn_debugiothread();
+
+    /* Sleep */
+    for(;;){
+        std::this_thread::sleep_for(std::chrono::seconds(1));
+    }
+
     return 0;
 }
