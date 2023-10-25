@@ -453,16 +453,81 @@ pool_hostptr(uint32_t offs){
 }
 
 
-void
-thr_debugiothread(int fd){
-    bool writer_thread = fd == 2 ? true : false;
+static void
+thr_debugprintthread(uint32_t fd, int ident){
+    int32_t* buf;
+    uint32_t ptr0, ptr1;
+    int32_t res;
+    char linebuf[2000];
+    int i,r;
+    const char* header;
+    header = (ident == 0) ? "[stdout]" : "[stderr]";
 
     /* Allocate linux context */
     newinstance();
     prepare_newthread();
 
+    /* Allocate syscall buffer */
+    buf = (int32_t*)pool_alloc(3000);
+    ptr0 = pool_lklptr(&buf[0]);
+    ptr1 = pool_lklptr(&buf[3]);
+
+    for(;;){
+        buf[0] = fd;
+        buf[1] = ptr1;
+        buf[2] = 2000;
+        res = runsyscall32(63 /* __NR_read */, 3, ptr0);
+        printf("res = %d\n", res);
+        if(res < 0){
+            break;
+        }
+        if(res > 2000){
+            printf("???\n");
+            abort();
+        }
+        memcpy(linebuf, (void*)&buf[3], res);
+        linebuf[res] = 0;
+        r = 0;
+        for(i=0;i!=res;i++){
+            switch(linebuf[i]){
+                case '\n':
+                    linebuf[i] = 0;
+                    printf("%s: %s\n", header,
+                           (char*)&linebuf[r]);
+                    r = i+1;
+                    break;
+                default:
+                    break;
+            }
+        }
+        if(r<i){
+            printf("%s: %s\n", header, (char*)&linebuf[r]);
+        }
+    }
+
+    pool_free(buf);
     thr_tls_cleanup();
 }
+
+static void
+debugwrite(uint32_t fd, const char* data, size_t len){
+    int32_t* buf;
+    uint32_t ptr0, ptr1;
+    int32_t res;
+    /* Assume the caller already have Linux context */
+    buf = (int32_t*)pool_alloc(4*3+len);
+    ptr0 = pool_lklptr(&buf[0]);
+    ptr1 = pool_lklptr(&buf[3]);
+    memcpy((char*)&buf[3], data, len);
+    buf[0] = fd;
+    buf[1] = ptr1;
+    buf[2] = len;
+    res = runsyscall32(64 /* __NR_write */, 3, ptr0);
+    printf("write res = %d\n", res);
+}
+
+static int kfd_stdout;
+static int kfd_stderr;
 
 void
 spawn_debugiothread(void){
@@ -472,7 +537,7 @@ spawn_debugiothread(void){
     /* Allocate syscall buffer */
     buf = (int32_t*)pool_alloc(sizeof(int32_t)*32);
 
-    for(int i=0;i!=3;i++){
+    for(int i=0;i!=2;i++){
         std::thread* thr;
         /* Generate Pipe inside kernel */
         ptr0 = pool_lklptr(&buf[0]);
@@ -484,7 +549,14 @@ spawn_debugiothread(void){
         printf("Ret: %d, %d, %d\n", ret, buf[2], buf[3]);
 
         /* Spawn handler */
-        ///thr = new std::thread(thr_debugiothread, i);
+        thr = new std::thread(thr_debugprintthread, buf[2], i);
+        thr->detach();
+
+        if(i == 0){
+            kfd_stdout = buf[3];
+        }else{
+            kfd_stderr = buf[3];
+        }
     }
     pool_free(buf);
 }
@@ -772,6 +844,7 @@ main(int ac, char** av){
     /* Sleep */
     for(;;){
         std::this_thread::sleep_for(std::chrono::seconds(1));
+        debugwrite(kfd_stdout, "out\n", 4);
     }
 
     return 0;
