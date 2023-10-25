@@ -234,7 +234,8 @@ static uint32_t /* Key */
 thr_tls_alloc(uint32_t destructor){
     std::lock_guard<std::mutex> NN(tlsidmtx);
     int i;
-    for(i=0;i!=MAX_MYTLS;i++){
+    /* Don't return 0 as TLS key */
+    for(i=1;i!=MAX_MYTLS;i++){
         if(tlsstate[i].used == 0){
             tlsstate[i].used = 1;
             tlsstate[i].func32_destructor = destructor;
