@@ -20,6 +20,15 @@ static asmlinkage long sys_virtio_mmio_device_add(long base, long size,
 						  unsigned int irq);
 
 typedef long (*syscall_handler_t)(long arg1, ...);
+#ifdef __wasm__
+typedef long (*syscall_handler0_t)(void);
+typedef long (*syscall_handler1_t)(long arg1);
+typedef long (*syscall_handler2_t)(long arg1, long arg2);
+typedef long (*syscall_handler3_t)(long arg1, long arg2, long arg3);
+typedef long (*syscall_handler4_t)(long arg1, long arg2, long arg3, long arg4);
+typedef long (*syscall_handler5_t)(long arg1, long arg2, long arg3, long arg4, long arg5);
+typedef long (*syscall_handler6_t)(long arg1, long arg2, long arg3, long arg4, long arg5, long arg6);
+#endif
 
 #undef __SYSCALL
 #define __SYSCALL(nr, sym) [nr] = (syscall_handler_t)sym,
@@ -33,6 +42,7 @@ syscall_handler_t syscall_table[__NR_syscalls] = {
 #endif
 };
 
+#ifndef __wasm__
 static long run_syscall(long no, long *params)
 {
 	long ret;
@@ -47,6 +57,45 @@ static long run_syscall(long no, long *params)
 
 	return ret;
 }
+#else
+static long run_syscall(long no, int nargs, long *params)
+{
+	long ret;
+
+	if (no < 0 || no >= __NR_syscalls)
+		return -ENOSYS;
+
+        switch(nargs){
+            case 0:
+                ret = ((syscall_handler0_t)syscall_table[no])();
+                break;
+            case 1:
+                ret = ((syscall_handler1_t)syscall_table[no])(params[0]);
+                break;
+            case 2:
+                ret = ((syscall_handler2_t)syscall_table[no])(params[0], params[1]);
+                break;
+            case 3:
+                ret = ((syscall_handler3_t)syscall_table[no])(params[0], params[1], params[2]);
+                break;
+            case 4:
+                ret = ((syscall_handler4_t)syscall_table[no])(params[0], params[1], params[2], params[3]);
+                break;
+            case 5:
+                ret = ((syscall_handler5_t)syscall_table[no])(params[0], params[1], params[2], params[3], params[4]);
+                break;
+            case 6:
+                ret = ((syscall_handler6_t)syscall_table[no])(params[0], params[1], params[2], params[3], params[4], params[5]);
+                break;
+            default:
+                return -ENOSYS;
+        }
+
+	task_work_run();
+
+	return ret;
+}
+#endif
 
 
 #define CLONE_FLAGS (CLONE_VM | CLONE_FS | CLONE_FILES | CLONE_THREAD |	\
@@ -96,7 +145,11 @@ static void del_host_task(void *arg)
 
 static struct lkl_tls_key *task_key;
 
+#ifndef __wasm__
 long lkl_syscall(long no, long *params)
+#else
+long lkl_syscall(long no, int nargs, long *params)
+#endif
 {
 	struct task_struct *task = host0;
 	long ret;
@@ -117,7 +170,11 @@ long lkl_syscall(long no, long *params)
 
 	switch_to_host_task(task);
 
+#ifndef __wasm__
 	ret = run_syscall(no, params);
+#else
+	ret = run_syscall(no, nargs, params);
+#endif
 
 	if (no == __NR_reboot) {
 		thread_sched_jb();

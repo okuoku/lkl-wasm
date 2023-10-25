@@ -144,7 +144,11 @@ long lkl_sys_halt(void)
 	long params[6] = {LINUX_REBOOT_MAGIC1,
 		LINUX_REBOOT_MAGIC2, LINUX_REBOOT_CMD_RESTART, };
 
+#ifndef __wasm__
 	err = lkl_syscall(__NR_reboot, params);
+#else
+	err = lkl_syscall(__NR_reboot, 4, params);
+#endif
 	if (err < 0)
 		return err;
 

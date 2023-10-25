@@ -3,7 +3,11 @@
 
 int syscalls_init(void);
 void syscalls_cleanup(void);
+#ifndef __wasm__
 long lkl_syscall(long no, long *params);
+#else
+long lkl_syscall(long no, int nargs, long *params);
+#endif
 void wakeup_idle_host_task(void);
 
 #define sys_mmap sys_mmap_pgoff
