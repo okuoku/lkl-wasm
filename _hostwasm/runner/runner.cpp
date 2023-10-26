@@ -19,6 +19,21 @@ runsyscall32(uint32_t no, uint32_t nargs, uint32_t in){
     return w2c_kernel_syscall(my_linux, no, nargs, in);
 }
 
+static uint32_t
+newtask_process(void){
+    return w2c_kernel_taskmgmt(my_linux, 1, 0);
+}
+
+static uint32_t
+newtask_thread(void){
+    return w2c_kernel_taskmgmt(my_linux, 2, 0);
+}
+
+static void
+newtask_apply(uint32_t ctx){
+    w2c_kernel_taskmgmt(my_linux, 3, ctx);
+}
+
 std::mutex instancemtx;
 static void
 newinstance(){
@@ -524,6 +539,12 @@ debugwrite(uint32_t fd, const char* data, size_t len){
     buf[2] = len;
     res = runsyscall32(64 /* __NR_write */, 3, ptr0);
     printf("write res = %d\n", res);
+    pool_free(buf);
+}
+
+static uint32_t
+debuggetpid(void){
+    return runsyscall32(172 /* __NR_getpid */, 0, 0);
 }
 
 static int kfd_stdout;
@@ -795,6 +816,34 @@ w2c_env_nccc_call64(struct w2c_env* env, u32 inptr, u32 outptr){
     }
 }
 
+static void
+thr_user(uint32_t procctx){
+    /* Allocate linux context */
+    newinstance();
+    prepare_newthread();
+
+    /* Assign process ctx */
+    newtask_apply(procctx);
+    /* Sleep */
+    for(;;){
+        std::this_thread::sleep_for(std::chrono::seconds(1));
+        debugwrite(kfd_stdout, "out\n", 4);
+        printf("(user) pid = %d\n", debuggetpid());
+    }
+}
+
+static void
+spawn_user(void){
+    uint32_t procctx;
+    std::thread* thr;
+    /* fork */
+    procctx = newtask_process();
+    printf("procctx = %d\n", procctx);
+
+    thr = new std::thread(thr_user, procctx);
+    thr->detach();
+}
+
 int
 main(int ac, char** av){
     int i;
@@ -841,10 +890,14 @@ main(int ac, char** av){
     /* Create debug I/O thread */
     spawn_debugiothread();
 
+    printf("(init) pid = %d\n", debuggetpid());
+
+    /* Create user program */
+    spawn_user();
+
     /* Sleep */
     for(;;){
         std::this_thread::sleep_for(std::chrono::seconds(1));
-        debugwrite(kfd_stdout, "out\n", 4);
     }
 
     return 0;

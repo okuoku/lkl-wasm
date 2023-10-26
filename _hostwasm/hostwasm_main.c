@@ -107,6 +107,25 @@ copy_init_thread_info(void){
     memcpy(dummy_page, &init_thread_info, 0x220);
 }
 
+long wasmlinux_create_process_ctx(void);
+long wasmlinux_create_thread_ctx(void);
+void wasmlinux_set_ctx(long ctx);
+
+uint32_t __attribute__((export_name ("taskmgmt")))
+taskmgmt(uint32_t op, uint32_t arg){
+    switch(op){
+        case 1:
+            return wasmlinux_create_process_ctx();
+        case 2:
+            return wasmlinux_create_thread_ctx();
+        case 3:
+            wasmlinux_set_ctx(arg);
+            return 0;
+        default:
+            return 0;
+    }
+}
+
 uint32_t __attribute__((export_name ("syscall"))) 
 syscall(uint32_t no, uint32_t nargs, uint32_t* in){
     return lkl_syscall(no, nargs, (long*)in);
