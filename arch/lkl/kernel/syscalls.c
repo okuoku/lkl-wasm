@@ -187,6 +187,60 @@ out:
 	return ret;
 }
 
+// #ifdef __wasm__ 
+
+static long 
+wasmlinux_newtask(long clone_flags){
+    struct task_struct *task;
+    struct task_struct *newtask;
+    int ret;
+    pid_t pid;
+
+    task = lkl_ops->tls_get(task_key);
+
+    ret = lkl_cpu_get();
+    if (ret < 0)
+        return 0;
+
+    switch_to_host_task(task);
+
+    pid = kernel_thread(host_task_stub, NULL, clone_flags);
+    if (pid < 0)
+        return 0;
+
+    rcu_read_lock();
+    newtask = find_task_by_pid_ns(pid, &init_pid_ns);
+    rcu_read_unlock();
+
+    host_task_id++;
+
+    snprintf(task->comm, sizeof(task->comm), "host%d", host_task_id);
+
+    switch_to_host_task(newtask);
+
+    lkl_cpu_put();
+
+    return (long)newtask;
+}
+
+long wasmlinux_create_process_ctx(void){
+    const long FLAGS = (CLONE_VM | CLONE_FS | CLONE_FILES | CLONE_SIGHAND | SIGCHLD);
+
+    return wasmlinux_newtask(FLAGS);
+}
+
+long wasmlinux_create_thread_ctx(void){
+    const long FLAGS = (CLONE_VM | CLONE_FS | CLONE_FILES | CLONE_THREAD | CLONE_SIGHAND | SIGCHLD);
+
+    return wasmlinux_newtask(FLAGS);
+}
+
+void wasmlinux_set_ctx(long ctx){
+    lkl_ops->tls_set(task_key, (void*)ctx);
+}
+
+// #endif
+
 static struct task_struct *idle_host_task;
 
 /* called from idle, don't failed, don't block */
