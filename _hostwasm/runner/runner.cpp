@@ -264,7 +264,7 @@ thr_tls_alloc(uint32_t destructor){
 static void
 thr_tls_free(uint32_t key){
     std::lock_guard<std::mutex> NN(tlsidmtx);
-    if(key > MAX_MYTLS){
+    if(key >= MAX_MYTLS){
         abort();
     }
     tlsstate[key].used = 0;
@@ -272,7 +272,7 @@ thr_tls_free(uint32_t key){
 
 static uint32_t
 thr_tls_get(uint32_t key){
-    if(key > MAX_MYTLS){
+    if(key >= MAX_MYTLS){
         abort();
     }
     printf("TLS[%d]: %d -> %x\n",my_thread_objid,key,mytls[key]);
@@ -281,7 +281,7 @@ thr_tls_get(uint32_t key){
 
 static uint32_t
 thr_tls_set(uint32_t key, uint32_t data){
-    if(key > MAX_MYTLS){
+    if(key >= MAX_MYTLS){
         abort();
     }
     mytls[key] = data;
@@ -316,7 +316,7 @@ class thr_exit {};
 static uintptr_t
 thr_trampoline(int objid){
     funcptr f;
-    uint32_t ret;
+    uint32_t ret = 0;
     try {
         newinstance();
         memset(mytls, 0, sizeof(mytls));
