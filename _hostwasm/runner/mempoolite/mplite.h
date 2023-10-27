@@ -40,11 +40,7 @@
 #ifndef MPLITE_H
 #define MPLITE_H
 
-#ifdef _WIN32
-#include "pstdint.h"
-#else
 #include <stdint.h>
-#endif /* #ifdef _WIN32 */
 
 /**
  * @brief The function call returns success
