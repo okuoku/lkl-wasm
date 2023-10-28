@@ -920,9 +920,6 @@ static void tick_nohz_stop_tick(struct tick_sched *ts, int cpu)
 
 	ts->next_tick = tick;
 
-        // FIXME: Workaround for wrong oneshot timer overwrite
-        return;
-
 	/*
 	 * If the expiration time == KTIME_MAX, then we simply stop
 	 * the tick timer.
