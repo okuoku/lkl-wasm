@@ -708,9 +708,6 @@ mod_timer(uint64_t* in, uint64_t* out){
                 abort();
             }
             printf("Oneshot timer: %d %ld\n",idx, in[2]);
-            if(in[2] == 4294967295){
-                abort();
-            }
             {
                 std::unique_lock<std::mutex> NN(*objtbl[idx].obj.timer.mtx);
                 objtbl[idx].obj.timer.wait_for = in[2];
