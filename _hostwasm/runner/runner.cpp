@@ -658,16 +658,23 @@ thr_timer(int objid){
                 /* No request at this time. */
                 cv->wait(NN);
             }else{
+                std::cv_status s;
                 /* wait and fire */
                 printf("Wait: %ld\n",wait_for);
-                if(std::cv_status::timeout == cv->wait_for(NN, std::chrono::nanoseconds(wait_for))){
+                s = cv->wait_for(NN, std::chrono::nanoseconds(wait_for));
+                if(s == std::cv_status::timeout){
                     printf("Fire: %d\n",objtbl[objid].obj.timer.func32);
                     mtx->unlock();
                     ret = f(my_linux, arg32);
                     mtx->lock();
                     printf("Done: %d\n",objtbl[objid].obj.timer.func32);
                 }else{
-                    printf("Rearm: %d\n", objtbl[objid].obj.timer.wait_for);
+                    if(objtbl[objid].obj.timer.wait_for == UINT64_MAX-1){
+                        printf("Spurious wakeup!: %ld again\n", wait_for);
+                        objtbl[objid].obj.timer.wait_for = wait_for;
+                    }else{
+                        printf("Rearm: %ld\n", objtbl[objid].obj.timer.wait_for);
+                    }
                 }
             }
         }
