@@ -131,6 +131,9 @@ syscall(uint32_t no, uint32_t nargs, uint32_t* in){
     return lkl_syscall(no, nargs, (long*)in);
 }
 
+typedef int (*initcall_t)(void);
+extern initcall_t __initcall__kmod_vhci_hcd__237_1574_vhci_hcd_init6;
+
 void __attribute__((export_name ("init"))) 
 init(void){
     copy_init_thread_info();
@@ -138,4 +141,5 @@ init(void){
     host_lkl_inittbl();
     lkl_init(lklhost_getops());
     lkl_start_kernel("mem=64M"); // FIXME
+    //__initcall__kmod_vhci_hcd__237_1574_vhci_hcd_init6();
 }

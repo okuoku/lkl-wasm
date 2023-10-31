@@ -28,6 +28,18 @@ typedef long (*syscall_handler3_t)(long arg1, long arg2, long arg3);
 typedef long (*syscall_handler4_t)(long arg1, long arg2, long arg3, long arg4);
 typedef long (*syscall_handler5_t)(long arg1, long arg2, long arg3, long arg4, long arg5);
 typedef long (*syscall_handler6_t)(long arg1, long arg2, long arg3, long arg4, long arg5, long arg6);
+
+
+/* FIXME: stub */
+typedef int (*initcall_t)(void);
+extern initcall_t __initcall__kmod_vhci_hcd__237_1574_vhci_hcd_init6;
+
+static long 
+callrestinit(void){
+    __initcall__kmod_vhci_hcd__237_1574_vhci_hcd_init6();
+    return 0;
+}
+
 #endif
 
 #undef __SYSCALL
@@ -39,6 +51,9 @@ syscall_handler_t syscall_table[__NR_syscalls] = {
 
 #if __BITS_PER_LONG == 32
 #include <asm/unistd_32.h>
+#endif
+#ifdef __wasm__
+        [224 /* swapon */] = (syscall_handler_t)callrestinit
 #endif
 };
 
