@@ -1,7 +1,6 @@
 #include <stdio.h>
 #include <stdint.h>
 #include <stdlib.h>
-#include "lin.h"
 #include "mplite.h"
 
 #include <thread>
@@ -9,14 +8,141 @@
 #include <condition_variable>
 #include <semaphore>
 
+/* Kernel */
+#include "lin.h"
 w2c_kernel the_linux;
 thread_local w2c_kernel* my_linux;
 
+/* Userproc */
+#include "user.h"
+w2c_user the_user;
+thread_local w2c_user* my_user;
+wasm_rt_funcref_table_t userfuncs;
+uint32_t userdata;
+uint32_t userstack;
+uint32_t usertablebase;
+
+/* Pool management */
+uint8_t* mpool_base;
+mplite_t mpool;
+std::mutex mtxpool;
+
+static int
+pool_acquire(void* bogus){
+    (void) bogus;
+    mtxpool.lock();
+    return 0;
+}
+
+static int
+pool_release(void* bogus){
+    (void) bogus;
+    mtxpool.unlock();
+    return 0;
+}
+const mplite_lock_t mpool_lockimpl = {
+    .arg = 0,
+    .acquire = pool_acquire,
+    .release = pool_release,
+};
+
+void*
+pool_alloc(uintptr_t size){
+    return mplite_malloc(&mpool, size);
+}
+
+void
+pool_free(void* ptr){
+    mplite_free(&mpool, ptr);
+}
+
+uint32_t
+pool_lklptr(void* ptr){
+    return (uintptr_t)((uint8_t*)ptr - mpool_base);
+}
+
+void*
+pool_hostptr(uint32_t offs){
+    return mpool_base + (uintptr_t)offs;
+}
+
+
+/* Objmgr */
+enum objtype{
+    OBJTYPE_DUMMY = 0,
+    OBJTYPE_FREE = 1,
+    OBJTYPE_SEM = 2,
+    OBJTYPE_MUTEX = 3,
+    OBJTYPE_RECURSIVE_MUTEX = 4,
+    OBJTYPE_THREAD = 5,
+    OBJTYPE_TIMER = 6
+};
+
+struct hostobj_s {
+    enum objtype type;
+    int id;
+    union {
+        std::counting_semaphore<>* sem;
+        std::mutex* mtx;
+        std::recursive_mutex* mtx_recursive;
+        struct {
+            uintptr_t func32;
+            uintptr_t arg32;
+            uintptr_t ret;
+            std::thread* thread;
+        } thr;
+        struct {
+            uint64_t wait_for;
+            uintptr_t func32;
+            uintptr_t arg32;
+            std::condition_variable* cv;
+            std::mutex* mtx;
+            std::thread* thread;
+            int running;
+        } timer;
+    } obj;
+};
+
+#define MAX_HOSTOBJ 4096
+#define MAX_MYTLS 128
+std::mutex objmtx;
+struct hostobj_s objtbl[MAX_HOSTOBJ];
+thread_local uint32_t mytls[MAX_MYTLS];
+thread_local int my_thread_objid;
+
+static int
+newobj(objtype type){
+    std::lock_guard<std::mutex> NN(objmtx);
+    int i;
+    for(i=0;i!=MAX_HOSTOBJ;i++){
+        if(objtbl[i].type == OBJTYPE_FREE){
+            objtbl[i].type = type;
+            return i;
+        }
+    }
+    abort();
+}
+
+static void
+delobj(int idx){
+    objtbl[idx].type = OBJTYPE_FREE;
+}
+
+
+/* Kernel <-> User */
+
 const uint64_t WASM_PAGE_SIZE = (64*1024);
 
-uint32_t /* -errno */
-runsyscall32(uint32_t no, uint32_t nargs, uint32_t in){
-    return w2c_kernel_syscall(my_linux, no, nargs, in);
+static void
+prepare_newthread(void){
+    int idx;
+    /* Allocate initial thread */
+    memset(mytls, 0, sizeof(mytls));
+    idx = newobj(OBJTYPE_THREAD);
+    objtbl[idx].obj.thr.func32 = 0;
+    objtbl[idx].obj.thr.arg32 = 0;
+    objtbl[idx].obj.thr.thread = nullptr;
+    my_thread_objid = idx;
 }
 
 static uint32_t
@@ -70,62 +196,90 @@ newinstance(){
 }
 
 
-enum objtype{
-    OBJTYPE_DUMMY = 0,
-    OBJTYPE_FREE = 1,
-    OBJTYPE_SEM = 2,
-    OBJTYPE_MUTEX = 3,
-    OBJTYPE_RECURSIVE_MUTEX = 4,
-    OBJTYPE_THREAD = 5,
-    OBJTYPE_TIMER = 6
-};
+uint32_t /* -errno */
+runsyscall32(uint32_t no, uint32_t nargs, uint32_t in){
+    return w2c_kernel_syscall(my_linux, no, nargs, in);
+}
 
-struct hostobj_s {
-    enum objtype type;
-    int id;
-    union {
-        std::counting_semaphore<>* sem;
-        std::mutex* mtx;
-        std::recursive_mutex* mtx_recursive;
-        struct {
-            uintptr_t func32;
-            uintptr_t arg32;
-            uintptr_t ret;
-            std::thread* thread;
-        } thr;
-        struct {
-            uint64_t wait_for;
-            uintptr_t func32;
-            uintptr_t arg32;
-            std::condition_variable* cv;
-            std::mutex* mtx;
-            std::thread* thread;
-            int running;
-        } timer;
-    } obj;
-};
+/* User handlers */
+uint32_t*
+w2c_env_0x5F_table_base(struct w2c_env* bogus){
+    return &usertablebase;
+}
 
-#define MAX_HOSTOBJ 4096
-std::mutex objmtx;
-struct hostobj_s objtbl[MAX_HOSTOBJ];
+uint32_t*
+w2c_env_0x5F_memory_base(struct w2c_env* bogus){
+    return &userdata;
+}
 
-static int
-newobj(objtype type){
-    std::lock_guard<std::mutex> NN(objmtx);
-    int i;
-    for(i=0;i!=MAX_HOSTOBJ;i++){
-        if(objtbl[i].type == OBJTYPE_FREE){
-            objtbl[i].type = type;
-            return i;
-        }
-    }
-    abort();
+uint32_t*
+w2c_env_0x5F_stack_pointer(struct w2c_env* bogus){
+    return &userstack;
+}
+
+wasm_rt_funcref_table_t* 
+w2c_env_0x5F_indirect_function_table(struct w2c_env* bogus){
+    return &userfuncs;
+}
+
+wasm_rt_memory_t* 
+w2c_env_memory(struct w2c_env* bogus){
+    return &the_linux.w2c_memory;
+}
+
+uint32_t
+w2c_env_wasmlinux_syscall32(struct w2c_env* env, uint32_t argc, uint32_t no,
+                            uint32_t args){
+    printf("(user) syscall = %d\n", no);
+    return runsyscall32(no, argc, args);
 }
 
 static void
-delobj(int idx){
-    objtbl[idx].type = OBJTYPE_FREE;
+thr_user(uint32_t procctx){
+    uint32_t ret;
+    /* Allocate linux context */
+    newinstance();
+    prepare_newthread();
+
+    /* Assign user instance */
+    my_user = &the_user;
+
+    /* Assign process ctx */
+    newtask_apply(procctx);
+
+    /* Run usercode */
+    ret = w2c_user_main(my_user, 0, 0);
+    printf("(user) ret = %d\n", ret);
+
 }
+
+static void
+spawn_user(void){
+    uint32_t procctx;
+    std::thread* thr;
+
+    /* Instantiate user module */
+    userstack = pool_lklptr(pool_alloc(1024*1024));
+    userdata = pool_lklptr(pool_alloc(wasm2c_user_max_env_memory));
+    /* FIXME: calc max size */
+    wasm_rt_allocate_funcref_table(&userfuncs, 1024, 1024);
+    usertablebase = 0;
+    printf("(user) data = %x\n", userdata);
+    printf("(user) stack = %x\n", userstack);
+    printf("(user) tablebase = %x\n", usertablebase);
+
+    wasm2c_user_instantiate(&the_user, 0);
+
+    /* fork */
+    procctx = newtask_process();
+    printf("procctx = %d\n", procctx);
+
+    thr = new std::thread(thr_user, procctx);
+    thr->detach();
+}
+
+/* Kernel handlers */
+
 
 static void
 mod_syncobjects(uint64_t* in, uint64_t* out){
@@ -206,7 +360,6 @@ mod_syncobjects(uint64_t* in, uint64_t* out){
     }
 }
 
-thread_local int my_thread_objid;
 typedef uint32_t (*funcptr)(w2c_kernel*, uint32_t);
 typedef void (*funcptr_cont)(w2c_kernel*);
 
@@ -235,7 +388,6 @@ getfunc_cont(int idx){
 }
 
 
-#define MAX_MYTLS 128
 
 struct {
     uint32_t func32_destructor;
@@ -243,7 +395,6 @@ struct {
 } tlsstate[MAX_MYTLS];
 
 std::mutex tlsidmtx;
-thread_local uint32_t mytls[MAX_MYTLS];
 
 static uint32_t /* Key */
 thr_tls_alloc(uint32_t destructor){
@@ -333,18 +484,6 @@ thr_trampoline(int objid){
 }
 
 static void
-prepare_newthread(void){
-    int idx;
-    /* Allocate initial thread */
-    memset(mytls, 0, sizeof(mytls));
-    idx = newobj(OBJTYPE_THREAD);
-    objtbl[idx].obj.thr.func32 = 0;
-    objtbl[idx].obj.thr.arg32 = 0;
-    objtbl[idx].obj.thr.thread = nullptr;
-    my_thread_objid = idx;
-}
-
-static void
 mod_threads(uint64_t* in, uint64_t* out){
     int idx, idx2;
     uintptr_t res;
@@ -423,50 +562,6 @@ mod_threads(uint64_t* in, uint64_t* out){
             break;
     }
 }
-
-uint8_t* mpool_base;
-mplite_t mpool;
-std::mutex mtxpool;
-
-static int
-pool_acquire(void* bogus){
-    (void) bogus;
-    mtxpool.lock();
-    return 0;
-}
-
-static int
-pool_release(void* bogus){
-    (void) bogus;
-    mtxpool.unlock();
-    return 0;
-}
-const mplite_lock_t mpool_lockimpl = {
-    .arg = 0,
-    .acquire = pool_acquire,
-    .release = pool_release,
-};
-
-void*
-pool_alloc(uintptr_t size){
-    return mplite_malloc(&mpool, size);
-}
-
-void
-pool_free(void* ptr){
-    mplite_free(&mpool, ptr);
-}
-
-uint32_t
-pool_lklptr(void* ptr){
-    return (uintptr_t)((uint8_t*)ptr - mpool_base);
-}
-
-void*
-pool_hostptr(uint32_t offs){
-    return mpool_base + (uintptr_t)offs;
-}
-
 
 static void
 thr_debugprintthread(uint32_t fd, int ident){
@@ -818,34 +913,6 @@ w2c_env_nccc_call64(struct w2c_env* env, u32 inptr, u32 outptr){
             abort();
             return;
     }
-}
-
-static void
-thr_user(uint32_t procctx){
-    /* Allocate linux context */
-    newinstance();
-    prepare_newthread();
-
-    /* Assign process ctx */
-    newtask_apply(procctx);
-    /* Sleep */
-    for(;;){
-        std::this_thread::sleep_for(std::chrono::seconds(1));
-        debugwrite(kfd_stdout, "out\n", 4);
-        printf("(user) pid = %d\n", debuggetpid());
-    }
-}
-
-static void
-spawn_user(void){
-    uint32_t procctx;
-    std::thread* thr;
-    /* fork */
-    procctx = newtask_process();
-    printf("procctx = %d\n", procctx);
-
-    thr = new std::thread(thr_user, procctx);
-    thr->detach();
 }
 
 int

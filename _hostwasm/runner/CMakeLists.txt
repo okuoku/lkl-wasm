@@ -8,6 +8,7 @@ set(CMAKE_CXX_STANDARD 20)
 add_executable(runner
     wasm2c-rt/wasm-rt-impl.c
     ../lin.c
+    ../user.c
     mempoolite/mplite.c
     runner.cpp
 )
