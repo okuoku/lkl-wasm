@@ -12,7 +12,7 @@ int
 main(int ac, char** av){
     const char msg[] = "hello, world!\n";
     uint32_t args[6];
-    args[0] = 1;
+    args[0] = 2;
     args[1] = (uint32_t)msg;
     args[2] = sizeof(msg);
     (void)wasmlinux_syscall32(3, 64 /* __NR_write */, args);

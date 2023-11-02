@@ -201,6 +201,46 @@ runsyscall32(uint32_t no, uint32_t nargs, uint32_t in){
     return w2c_kernel_syscall(my_linux, no, nargs, in);
 }
 
+static uint32_t
+debuggetpid(void){
+    return runsyscall32(172 /* __NR_getpid */, 0, 0);
+}
+
+static uint32_t
+debugdup3(uint32_t oldfd, uint32_t newfd, uint32_t flags){
+    int32_t* buf;
+    uint32_t ptr0;
+    int32_t res;
+    /* Assume the caller already have Linux context */
+    buf = (int32_t*)pool_alloc(4*3);
+    ptr0 = pool_lklptr(&buf[0]);
+    buf[0] = oldfd;
+    buf[1] = newfd;
+    buf[2] = flags;
+    res = runsyscall32(24 /* __NR_dup3 */, 3, ptr0);
+    printf("debug dup3 = %d\n", res);
+    pool_free(buf);
+    return res;
+}
+
+static void
+debugclose(uint32_t fd){
+    int32_t* buf;
+    uint32_t ptr0;
+    int32_t res;
+    /* Assume the caller already have Linux context */
+    buf = (int32_t*)pool_alloc(4);
+    ptr0 = pool_lklptr(&buf[0]);
+    buf[0] = fd;
+    res = runsyscall32(57 /* __NR_close */, 1, ptr0);
+    printf("debug close(%d) = %d\n", fd, res);
+    pool_free(buf);
+    return;
+}
+
+static int kfd_stdout;
+static int kfd_stderr;
+
 /* User handlers */
 uint32_t*
 w2c_env_0x5F_table_base(struct w2c_env* bogus){
@@ -234,9 +274,59 @@ w2c_env_wasmlinux_syscall32(struct w2c_env* env, uint32_t argc, uint32_t no,
     return runsyscall32(no, argc, args);
 }
 
+static uint32_t
+create_envblock(const char* argv[], char const* envp){
+    size_t o, s, arrsize, total, argtotal, envpsize;
+    int i;
+    uint32_t ptr0;
+    uint32_t* a;
+    char* buf;
+    /* [0] argc = envblock
+     * [1] argv(0)
+     * [2] argv(1)
+     *   :
+     * [argc] argv(argc) = 0
+     * [argc+1] envp */
+
+    /* Pass1: Calc bufsize */
+    i = 0;
+    argtotal = 0;
+    while(argv[i]){
+        argtotal += strnlen(argv[i], 1024*1024);
+        argtotal ++; /* NUL */
+        i++;
+    }
+    arrsize = i+2 /* terminator + envp */;
+    envpsize = strnlen(envp, 1024*1024);
+    envpsize++; /* NUL */
+
+    total = arrsize*4 + argtotal + envpsize;
+    buf = (char*)pool_alloc(total*4 + argtotal + envpsize);
+    ptr0 = pool_lklptr(buf);
+    memset(buf, 0, total);
+
+    /* Pass2: Fill buffer */
+    o = arrsize*4;
+    a = (uint32_t*)buf;
+    a[0] = arrsize - 2; /* argc */
+    for(i=0;i!=a[0];i++){
+        a[i+1] = pool_lklptr(buf + o); /* argv* */
+        s = strnlen(argv[i], 1024*1024);
+        memcpy(buf + o, argv[i], s);
+        o += (s + 1);
+    }
+    memcpy(buf + o, envp, envpsize);
+    return ptr0;
+}
+
 static void
 thr_user(uint32_t procctx){
+    uint32_t envblock;
     uint32_t ret;
+    const char* argv[] = {
+        "dummy", 0
+    };
+    const char* envp = "";
     /* Allocate linux context */
     newinstance();
     prepare_newthread();
@@ -247,10 +337,27 @@ thr_user(uint32_t procctx){
     /* Assign process ctx */
     newtask_apply(procctx);
 
-    /* Run usercode */
-    ret = w2c_user_main(my_user, 0, 0);
-    printf("(user) ret = %d\n", ret);
+    /* Setup initial stdin/out */
+    ret = debugdup3(kfd_stdout, 10, 0);
+    printf("(user) stdout => 10 : %d\n", ret);
+    ret = debugdup3(kfd_stderr, 11, 0);
+    printf("(user) stderr => 11 : %d\n", ret);
+    debugclose(kfd_stdout);
+    debugclose(kfd_stderr);
+    ret = debugdup3(10, 1, 0);
+    printf("(user) 10 => stdout : %d\n", ret);
+    ret = debugdup3(11, 2, 0);
+    printf("(user) 11 => stderr : %d\n", ret);
 
+
+    /* MUSL startup */
+    envblock = create_envblock(argv, envp);
+    /* Run usercode */
+    // Raw init
+    // ret = w2c_user_main(my_user, 0, 0);
+    // printf("(user) ret = %d\n", ret);
+    w2c_user_0x5Fstart_c(my_user, envblock);
+    // FIXME: free envblock at exit()
 }
 
 static void
@@ -587,7 +694,7 @@ thr_debugprintthread(uint32_t fd, int ident){
         buf[1] = ptr1;
         buf[2] = 2000;
         res = runsyscall32(63 /* __NR_read */, 3, ptr0);
-        printf("res = %d\n", res);
+        printf("res = %d (from: %d, %x)\n", res, my_thread_objid, mytls[1]);
         if(res < 0){
             break;
         }
@@ -636,14 +743,6 @@ debugwrite(uint32_t fd, const char* data, size_t len){
     printf("write res = %d\n", res);
     pool_free(buf);
 }
-
-static uint32_t
-debuggetpid(void){
-    return runsyscall32(172 /* __NR_getpid */, 0, 0);
-}
-
-static int kfd_stdout;
-static int kfd_stderr;
 
 void
 spawn_debugiothread(void){
@@ -755,14 +854,14 @@ thr_timer(int objid){
             }else{
                 std::cv_status s;
                 /* wait and fire */
-                printf("Wait: %ld\n",wait_for);
+                //printf("Wait: %ld\n",wait_for);
                 s = cv->wait_for(NN, std::chrono::nanoseconds(wait_for));
                 if(s == std::cv_status::timeout){
-                    printf("Fire: %d\n",objtbl[objid].obj.timer.func32);
+                    //printf("Fire: %d\n",objtbl[objid].obj.timer.func32);
                     mtx->unlock();
                     ret = f(my_linux, arg32);
                     mtx->lock();
-                    printf("Done: %d\n",objtbl[objid].obj.timer.func32);
+                    //printf("Done: %d\n",objtbl[objid].obj.timer.func32);
                 }else{
                     if(objtbl[objid].obj.timer.wait_for == UINT64_MAX-1){
                         printf("Spurious wakeup!: %ld again\n", wait_for);
@@ -809,7 +908,7 @@ mod_timer(uint64_t* in, uint64_t* out){
             if(objtbl[idx].type != OBJTYPE_TIMER){
                 abort();
             }
-            printf("Oneshot timer: %d %ld\n",idx, in[2]);
+            //printf("Oneshot timer: %d %ld\n",idx, in[2]);
             {
                 std::unique_lock<std::mutex> NN(*objtbl[idx].obj.timer.mtx);
                 objtbl[idx].obj.timer.wait_for = in[2];
@@ -849,7 +948,7 @@ mod_ctx(uint64_t* in, uint64_t* out){
             *p = (uintptr_t)(gp);
             f = getfunc_cont(in[2]);
             try {
-                printf("Run: %lx %p\n", in[1], gp);
+                //printf("Run: %lx %p\n", in[1], gp);
                 f(my_linux);
             } catch (guardian& gg) {
                 if(gg.ident != (uintptr_t)gp){
@@ -862,7 +961,7 @@ mod_ctx(uint64_t* in, uint64_t* out){
         case 2: /* jmp_buf_longjmp [5 2 ptr32 val32] => NORETURN */
             p = (uintptr_t*)pool_hostptr(in[1]);
             gp = (guardian*)(*p);
-            printf("Throw: %lx %p\n", in[1], gp);
+            //printf("Throw: %lx %p\n", in[1], gp);
             throw *gp;
         default:
             abort();
