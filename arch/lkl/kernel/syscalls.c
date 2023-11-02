@@ -239,7 +239,7 @@ wasmlinux_newtask(long clone_flags){
 }
 
 long wasmlinux_create_process_ctx(void){
-    const long FLAGS = (CLONE_VM | CLONE_FS | CLONE_FILES | CLONE_SIGHAND | SIGCHLD);
+    const long FLAGS = (CLONE_VM | SIGCHLD);
 
     return wasmlinux_newtask(FLAGS);
 }
