@@ -4,9 +4,9 @@
 int
 __original_main(int ac, char** av, char** envp){
     int count = 0;
-    printf("Hello, world!\n");
+    fprintf(stderr, "Hello, world!\n");
     for(;;){
-        printf("Sleep...%d\n", count);
+        fprintf(stderr, "Sleep...%d\n", count);
         count++;
         sleep(1);
     }
