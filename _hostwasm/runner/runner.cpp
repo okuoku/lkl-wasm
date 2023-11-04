@@ -130,6 +130,23 @@ delobj(int idx){
 
 
 /* Kernel <-> User */
+#include "kernel_data/syscalls.h"
+
+#define LKL_SYSCALL_MAX 500
+
+static int syscall_argc_tbl[LKL_SYSCALL_MAX];
+
+static void
+init_syscall_argc_table(void){
+    int i;
+    for(i=0;i!=LKL_SYSCALL_MAX;i++){
+        syscall_argc_tbl[i] = -1;
+    }
+#define SYSCALL_ARGC(sym, argc) syscall_argc_tbl[sym] = argc;
+#include "kernel_data/syscall_argc.h"
+#include "kernel_data/syscall_argc_fixup.h"
+#undef SYSCALL_ARGC
+}
 
 const uint64_t WASM_PAGE_SIZE = (64*1024);
 
@@ -198,7 +215,17 @@ newinstance(){
 
 uint32_t /* -errno */
 runsyscall32(uint32_t no, uint32_t nargs, uint32_t in){
-    return w2c_kernel_syscall(my_linux, no, nargs, in);
+    int true_argc;
+    true_argc = syscall_argc_tbl[no];
+    if(true_argc == -1){
+        printf("Unknown syscall! (%d)\n", no);
+        true_argc = nargs;
+    }else{
+        if(true_argc != nargs){
+            printf("Override syscall args (%d: %d => %d)\n", no, nargs, true_argc);
+        }
+    }
+    return w2c_kernel_syscall(my_linux, no, true_argc, in);
 }
 
 static uint32_t
@@ -1023,6 +1050,7 @@ main(int ac, char** av){
     uint64_t maxpages;
     uint32_t mpool_start;
 
+    init_syscall_argc_table();
     /* Init objtbl */
     for(i=0;i!=MAX_HOSTOBJ;i++){
         objtbl[i].id = i;
