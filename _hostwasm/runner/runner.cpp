@@ -403,6 +403,7 @@ spawn_user(void){
     printf("(user) tablebase = %x\n", usertablebase);
 
     wasm2c_user_instantiate(&the_user, 0);
+    w2c_user_0x5F_wasm_apply_data_relocs(&the_user);
 
     /* fork */
     procctx = newtask_process();
