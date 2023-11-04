@@ -107,6 +107,7 @@ copy_init_thread_info(void){
     memcpy(dummy_page, &init_thread_info, 0x220);
 }
 
+long wasmlinux_create_ctx(uint32_t arg);
 long wasmlinux_create_process_ctx(void);
 long wasmlinux_create_thread_ctx(void);
 void wasmlinux_set_ctx(long ctx);
@@ -121,6 +122,8 @@ taskmgmt(uint32_t op, uint32_t arg){
         case 3:
             wasmlinux_set_ctx(arg);
             return 0;
+        case 4:
+            return wasmlinux_create_ctx(arg);
         default:
             return 0;
     }
