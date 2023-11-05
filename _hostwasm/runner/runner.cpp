@@ -330,6 +330,20 @@ w2c_env_wasmlinux_syscall32(struct w2c_env* env, uint32_t argc, uint32_t no,
     return runsyscall32(no, argc, args);
 }
 
+thread_local uint32_t usertls;
+uint32_t
+w2c_env_wasmlinux_tlsrw32(struct w2c_env* env, uint32_t op, uint32_t val){
+    if(op == 0){
+        usertls = val;
+        return 0;
+    }else if(op == 1){
+        return usertls;
+    }else{
+        abort();
+    }
+    return -1;
+}
+
 static uint32_t
 create_envblock(const char* argv[], char const* envp){
     size_t o, s, arrsize, total, argtotal, envpsize;
@@ -383,6 +397,7 @@ thr_user(uint32_t procctx){
         "dummy", 0
     };
     const char* envp = "";
+
     /* Allocate linux context */
     newinstance();
     prepare_newthread();
@@ -441,6 +456,120 @@ spawn_user(void){
     thr = new std::thread(thr_user, procctx);
     thr->detach();
 }
+
+struct userthr_args {
+    std::condition_variable* cv;
+    std::mutex* mtx;
+    uint32_t ctx;
+    uint32_t tls;
+    uint32_t fn;
+    uint32_t stack;
+    uint32_t arg;
+    uint32_t pid;
+};
+
+typedef uint32_t (*startroutine)(w2c_user*, uint32_t);
+
+static void
+thr_uthr(struct userthr_args* args){
+    w2c_user* me;
+    uint32_t tid;
+    uint32_t fn;
+    uint32_t arg;
+    uint32_t stack;
+    startroutine start;
+
+    fn = args->fn;
+    arg = args->arg;
+    stack = args->stack;
+
+    /* Set TLS */
+    usertls = args->tls;
+
+    /* Allocate linux context */
+    newinstance();
+    prepare_newthread();
+
+
+    /* Assign process ctx */
+    newtask_apply(args->ctx);
+
+    /* Report back pid */
+    tid = runsyscall32(178 /* __NR_gettid */, 0, 0);
+    printf("Thread spawn. tid = %d, ctx = %x\n", tid, args->ctx);
+    {
+        std::unique_lock<std::mutex> NN(*args->mtx);
+        args->pid = tid;
+        args->cv->notify_one();
+    }
+    args = 0;
+
+
+    /* Allocate new instance */
+    me = (w2c_user*)malloc(sizeof(w2c_user));
+    memcpy(me, &the_user, sizeof(w2c_user));
+    /* Override stack pointer */
+    me->w2c_env_0x5F_stack_pointer = &stack; /* FIXME: is bottom??? */
+    //printf("New stack pointer = %d\n", me->w2c_0x5F_stack_pointer);
+
+    /* Assign user instance */
+    my_user = me;
+
+    /* Ready to roll, call fn */
+    start = (startroutine)userfuncs.data[fn].func;
+    printf("Calling %d (%p) ...\n",fn,start);
+    start(my_user, arg);
+    printf("Done.\n");
+}
+
+
+uint32_t
+w2c_env_wasmlinux_clone32(struct w2c_env* env, 
+                          uint32_t fn, uint32_t stack, 
+                          uint32_t flags, uint32_t arg,
+                          uint32_t ptid, uint32_t tls, uint32_t ctid){
+    uint32_t pid;
+    std::thread* thr;
+    struct userthr_args* thrargs;
+    /* FIXME: Detect calling process using env or TLS */
+    int myflags = 0;
+    if(flags & LKL_CLONE_SETTLS){
+        myflags |= LKL_CLONE_SETTLS;
+        flags &= ~LKL_CLONE_SETTLS;
+    }
+    
+    if(flags & CLONE_THREAD){
+        /* Thread creation */
+        thrargs = (struct userthr_args*)malloc(sizeof(struct userthr_args));
+        if(myflags & LKL_CLONE_SETTLS){
+            thrargs->tls = tls;
+        }else{
+            thrargs->tls = 0;
+        }
+        thrargs->cv = new std::condition_variable();
+        thrargs->mtx = new std::mutex();
+        thrargs->fn = fn;
+        thrargs->stack = stack;
+        thrargs->arg = arg;
+        thrargs->ctx = w2c_kernel_taskmgmt(my_linux, 4, flags, ptid, ctid);
+        {
+            std::unique_lock<std::mutex> NN(*thrargs->mtx);
+            thr = new std::thread(thr_uthr, thrargs);
+            thr->detach();
+            thrargs->cv->wait(NN);
+            pid = thrargs->pid;
+        }
+        delete thrargs->cv;
+        delete thrargs->mtx;
+        free(thrargs);
+    }else{
+        /* Process creation */
+        printf("Unimpl.\n");
+        abort();
+    }
+    return pid;
+}
+
 
 /* Kernel handlers */
 
