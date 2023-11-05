@@ -107,13 +107,13 @@ copy_init_thread_info(void){
     memcpy(dummy_page, &init_thread_info, 0x220);
 }
 
-long wasmlinux_create_ctx(uint32_t arg);
+long wasmlinux_create_ctx(uint32_t arg, uint32_t v0, uint32_t v1);
 long wasmlinux_create_process_ctx(void);
 long wasmlinux_create_thread_ctx(void);
 void wasmlinux_set_ctx(long ctx);
 
 uint32_t __attribute__((export_name ("taskmgmt")))
-taskmgmt(uint32_t op, uint32_t arg){
+taskmgmt(uint32_t op, uint32_t arg, uint32_t v0, uint32_t v1){
     switch(op){
         case 1:
             return wasmlinux_create_process_ctx();
@@ -123,7 +123,7 @@ taskmgmt(uint32_t op, uint32_t arg){
             wasmlinux_set_ctx(arg);
             return 0;
         case 4:
-            return wasmlinux_create_ctx(arg);
+            return wasmlinux_create_ctx(arg, v0, v1);
         default:
             return 0;
     }
