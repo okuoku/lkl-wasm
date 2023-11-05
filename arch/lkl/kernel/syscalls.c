@@ -238,8 +238,45 @@ wasmlinux_newtask(long clone_flags){
     return (long)newtask;
 }
 
-long wasmlinux_create_ctx(long arg){
-    return wasmlinux_newtask(arg);
+long wasmlinux_create_ctx(long arg, void* ctid, void* ptid){
+    struct kernel_clone_args a = {
+        .flags = (arg & ~CSIGNAL),
+        .exit_signal = arg & CSIGNAL,
+        .fn = host_task_stub,
+        .fn_arg = 0,
+        .kthread = 0
+    };
+
+    struct task_struct *task;
+    struct task_struct *newtask;
+    int ret;
+    pid_t pid;
+
+    task = lkl_ops->tls_get(task_key);
+
+    ret = lkl_cpu_get();
+    if (ret < 0)
+        return 0;
+
+    switch_to_host_task(task);
+
+    pid = kernel_clone(&a);
+    if (pid < 0)
+        return 0;
+
+    rcu_read_lock();
+    newtask = find_task_by_pid_ns(pid, &init_pid_ns);
+    rcu_read_unlock();
+
+    host_task_id++;
+
+    snprintf(task->comm, sizeof(task->comm), "host%d", host_task_id);
+
+    switch_to_host_task(newtask);
+
+    lkl_cpu_put();
+
+    return (long)newtask;
 }
 
 long wasmlinux_create_process_ctx(void){
