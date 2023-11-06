@@ -128,6 +128,111 @@ delobj(int idx){
     objtbl[idx].type = OBJTYPE_FREE;
 }
 
+/* Kernel TLS */
+typedef uint32_t (*funcptr)(w2c_kernel*, uint32_t);
+typedef void (*funcptr_cont)(w2c_kernel*);
+
+static funcptr
+getfunc(int idx){
+    void* p;
+    //printf("Converting %d ...", idx);
+    if(idx >= the_linux.w2c_T0.size){
+        abort();
+    }
+    p = (void*)the_linux.w2c_T0.data[idx].func;
+    //printf(" %p\n", p);
+    return (funcptr)p;
+}
+
+static funcptr_cont
+getfunc_cont(int idx){
+    void* p;
+    //printf("Converting %d ...", idx);
+    if(idx >= the_linux.w2c_T0.size){
+        abort();
+    }
+    p = (void*)the_linux.w2c_T0.data[idx].func;
+    //printf(" %p\n", p);
+    return (funcptr_cont)p;
+}
+
+struct {
+    uint32_t func32_destructor;
+    int used;
+} tlsstate[MAX_MYTLS];
+
+std::mutex tlsidmtx;
+
+static uint32_t /* Key */
+thr_tls_alloc(uint32_t destructor){
+    std::lock_guard<std::mutex> NN(tlsidmtx);
+    int i;
+    /* Don't return 0 as TLS key */
+    for(i=1;i!=MAX_MYTLS;i++){
+        if(tlsstate[i].used == 0){
+            tlsstate[i].used = 1;
+            tlsstate[i].func32_destructor = destructor;
+            return i;
+        }
+    }
+    abort();
+    return 0; /* unreachable */
+}
+
+static void
+thr_tls_free(uint32_t key){
+    std::lock_guard<std::mutex> NN(tlsidmtx);
+    if(key >= MAX_MYTLS){
+        abort();
+    }
+    tlsstate[key].used = 0;
+}
+
+static uint32_t
+thr_tls_get(uint32_t key){
+    if(key >= MAX_MYTLS){
+        abort();
+    }
+    printf("TLS[%d]: %d -> %x\n",my_thread_objid,key,mytls[key]);
+    return mytls[key];
+}
+
+static uint32_t
+thr_tls_set(uint32_t key, uint32_t data){
+    if(key >= MAX_MYTLS){
+        abort();
+    }
+    mytls[key] = data;
+    return 0;
+}
+
+static void
+thr_tls_cleanup(void){
+    int i,runloop;
+    funcptr f;
+    runloop = 1;
+    while(runloop){
+        runloop = 0;
+        for(i=0;i!=MAX_MYTLS;i++){
+            if(mytls[i] != 0){
+                std::lock_guard<std::mutex> NN(tlsidmtx);
+                uint32_t funcid;
+                funcid = tlsstate[i].func32_destructor;
+                if(funcid != 0){
+                    f = getfunc(objtbl[funcid].obj.thr.func32);
+                    if(f){
+                        (void)f(my_linux, mytls[i]);
+                    }else{
+                        printf("???: TLS destructor %d did not found.\n", objtbl[funcid].obj.thr.func32);
+                    }
+                    mytls[i] = 0;
+                    runloop = 1;
+                }
+            }
+        }
+    }
+}
+
 
 /* Kernel <-> User */
 #include "kernel_data/syscalls.h"
@@ -468,6 +573,7 @@ struct userthr_args {
     uint32_t pid;
 };
 
+class thr_exit {};
 typedef uint32_t (*startroutine)(w2c_user*, uint32_t);
 
 static void
@@ -518,8 +624,13 @@ thr_uthr(struct userthr_args* args){
     /* Ready to roll, call fn */
     start = (startroutine)userfuncs.data[fn].func;
     printf("Calling %d (%p) ...\n",fn,start);
-    start(my_user, arg);
-    printf("Done.\n");
+    try {
+        start(my_user, arg);
+        thr_tls_cleanup();
+    } catch (thr_exit &req) {
+        printf("Exiting thread(user).\n");
+        thr_tls_cleanup();
+    }
 }
 
 
@@ -652,110 +763,6 @@ mod_syncobjects(uint64_t* in, uint64_t* out){
 
     }
 }
-
-typedef uint32_t (*funcptr)(w2c_kernel*, uint32_t);
-typedef void (*funcptr_cont)(w2c_kernel*);
-
-static funcptr
-getfunc(int idx){
-    void* p;
-    //printf("Converting %d ...", idx);
-    if(idx >= the_linux.w2c_T0.size){
-        abort();
-    }
-    p = (void*)the_linux.w2c_T0.data[idx].func;
-    //printf(" %p\n", p);
-    return (funcptr)p;
-}
-
-static funcptr_cont
-getfunc_cont(int idx){
-    void* p;
-    //printf("Converting %d ...", idx);
-    if(idx >= the_linux.w2c_T0.size){
-        abort();
-    }
-    p = (void*)the_linux.w2c_T0.data[idx].func;
-    //printf(" %p\n", p);
-    return (funcptr_cont)p;
-}
-
-
-
-struct {
-    uint32_t func32_destructor;
-    int used;
-} tlsstate[MAX_MYTLS];
-
-std::mutex tlsidmtx;
-
-static uint32_t /* Key */
-thr_tls_alloc(uint32_t destructor){
-    std::lock_guard<std::mutex> NN(tlsidmtx);
-    int i;
-    /* Don't return 0 as TLS key */
-    for(i=1;i!=MAX_MYTLS;i++){
-        if(tlsstate[i].used == 0){
-            tlsstate[i].used = 1;
-            tlsstate[i].func32_destructor = destructor;
-            return i;
-        }
-    }
-    abort();
-    return 0; /* unreachable */
-}
-
-static void
-thr_tls_free(uint32_t key){
-    std::lock_guard<std::mutex> NN(tlsidmtx);
-    if(key >= MAX_MYTLS){
-        abort();
-    }
-    tlsstate[key].used = 0;
-}
-
-static uint32_t
-thr_tls_get(uint32_t key){
-    if(key >= MAX_MYTLS){
-        abort();
-    }
-    printf("TLS[%d]: %d -> %x\n",my_thread_objid,key,mytls[key]);
-    return mytls[key];
-}
-
-static uint32_t
-thr_tls_set(uint32_t key, uint32_t data){
-    if(key >= MAX_MYTLS){
-        abort();
-    }
-    mytls[key] = data;
-    return 0;
-}
-
-static void
-thr_tls_cleanup(void){
-    int i,runloop;
-    funcptr f;
-    runloop = 1;
-    while(runloop){
-        runloop = 0;
-        for(i=0;i!=MAX_MYTLS;i++){
-            if(mytls[i] != 0){
-                std::lock_guard<std::mutex> NN(tlsidmtx);
-                uint32_t funcid;
-                funcid = tlsstate[i].func32_destructor;
-                if(funcid != 0){
-                    f = getfunc(objtbl[funcid].obj.thr.func32);
-                    (void)f(my_linux, mytls[i]);
-                    mytls[i] = 0;
-                    runloop = 1;
-                }
-            }
-        }
-    }
-}
-
-class thr_exit {};
 
 static uintptr_t
 thr_trampoline(int objid){
