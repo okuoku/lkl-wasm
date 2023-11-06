@@ -105,6 +105,17 @@ struct task_struct *__switch_to(struct task_struct *prev,
 	}
 
 	lkl_ops->sem_up(_next->sched_sem);
+        /* wasmlinux: Evaluate DEAD state to reap userthread */
+        {
+            // FIXME: kfree(ti) here
+            unsigned int prev_state;
+            prev_state = READ_ONCE(prev->__state);
+            if(prev_state == TASK_DEAD){
+                printk("Exiting userthread.\n");
+                lkl_ops->thread_exit();
+            }
+        }
+
 	if (test_bit(TIF_SCHED_JB, &_prev_flags)) {
 		lkl_ops->jmp_buf_longjmp(&_prev_jb, 1);
 	} else {
