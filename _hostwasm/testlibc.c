@@ -11,7 +11,7 @@ thr_test(void* bogus){
         counter++;
         sleep(2);
         if(counter == 2){
-            //return 0;
+            return (void*)0xdeadbeef;
         }
     }
     return 0;
@@ -26,7 +26,8 @@ __original_main(int ac, char** av, char** envp){
     pthread_t thr;
     r = pthread_create(&thr, 0, thr_test, 0);
 
-    //pthread_join(thr, &p);
+    pthread_join(thr, &p);
+    printf("... Joined %p\n", p);
 
     for(;;){
         fprintf(stderr, "Sleep...%d\n", count);

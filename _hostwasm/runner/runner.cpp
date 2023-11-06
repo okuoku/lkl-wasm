@@ -439,9 +439,11 @@ thread_local uint32_t usertls;
 uint32_t
 w2c_env_wasmlinux_tlsrw32(struct w2c_env* env, uint32_t op, uint32_t val){
     if(op == 0){
+        printf("USERTLS[%d] := %x\n", my_thread_objid, val);
         usertls = val;
         return 0;
     }else if(op == 1){
+        printf("USERTLS[%d] = %x\n", my_thread_objid, usertls);
         return usertls;
     }else{
         abort();
@@ -589,13 +591,13 @@ thr_uthr(struct userthr_args* args){
     arg = args->arg;
     stack = args->stack;
 
-    /* Set TLS */
-    usertls = args->tls;
-
     /* Allocate linux context */
     newinstance();
     prepare_newthread();
 
+    /* Set TLS */
+    printf("USERTLS[%d] := %x (init)\n", my_thread_objid, args->tls);
+    usertls = args->tls;
 
     /* Assign process ctx */
     newtask_apply(args->ctx);
@@ -652,6 +654,7 @@ w2c_env_wasmlinux_clone32(struct w2c_env* env,
     if(flags & CLONE_THREAD){
         /* Thread creation */
         thrargs = (struct userthr_args*)malloc(sizeof(struct userthr_args));
+        printf("TLS = %x\n",tls);
         if(myflags & LKL_CLONE_SETTLS){
             thrargs->tls = tls;
         }else{
