@@ -496,6 +496,8 @@ create_envblock(const char* argv[], char const* envp){
     return ptr0;
 }
 
+class thr_exit {};
+
 static void
 thr_user(uint32_t procctx){
     uint32_t envblock;
@@ -534,7 +536,13 @@ thr_user(uint32_t procctx){
     // Raw init
     // ret = w2c_user_main(my_user, 0, 0);
     // printf("(user) ret = %d\n", ret);
-    w2c_user_0x5Fstart_c(my_user, envblock);
+    try {
+        w2c_user_0x5Fstart_c(my_user, envblock);
+        thr_tls_cleanup();
+    } catch (thr_exit &req) {
+        printf("Exiting thread(main thread).\n");
+        thr_tls_cleanup();
+    }
     // FIXME: free envblock at exit()
 }
 
@@ -575,7 +583,6 @@ struct userthr_args {
     uint32_t pid;
 };
 
-class thr_exit {};
 typedef uint32_t (*startroutine)(w2c_user*, uint32_t);
 
 static void
