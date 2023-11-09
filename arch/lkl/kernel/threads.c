@@ -108,6 +108,7 @@ struct task_struct *__switch_to(struct task_struct *prev,
         /* wasmlinux: Evaluate DEAD state to reap userthread */
         {
             // FIXME: kfree(ti) here
+            // FIXME: Don't we have to detach..?
             unsigned int prev_state;
             prev_state = READ_ONCE(prev->__state);
             if(prev_state == TASK_DEAD){
