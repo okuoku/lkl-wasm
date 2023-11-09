@@ -111,6 +111,7 @@ long wasmlinux_create_ctx(uint32_t arg, uint32_t v0, uint32_t v1);
 long wasmlinux_create_process_ctx(void);
 long wasmlinux_create_thread_ctx(void);
 void wasmlinux_set_ctx(long ctx);
+void wasmlinux_get_signal(void);
 
 uint32_t __attribute__((export_name ("taskmgmt")))
 taskmgmt(uint32_t op, uint32_t arg, uint32_t v0, uint32_t v1){
@@ -124,6 +125,9 @@ taskmgmt(uint32_t op, uint32_t arg, uint32_t v0, uint32_t v1){
             return 0;
         case 4:
             return wasmlinux_create_ctx(arg, v0, v1);
+        case 5:
+            wasmlinux_get_signal();
+            return 0;
         default:
             return 0;
     }

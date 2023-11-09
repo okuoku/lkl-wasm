@@ -346,9 +346,9 @@ newinstance(){
     my_linux = me;
 }
 
-
 uint32_t /* -errno */
 runsyscall32(uint32_t no, uint32_t nargs, uint32_t in){
+    int32_t r;
     int true_argc;
     true_argc = syscall_argc_tbl[no];
     if(true_argc == -1){
@@ -359,7 +359,20 @@ runsyscall32(uint32_t no, uint32_t nargs, uint32_t in){
             printf("Override syscall args (%d: %d => %d)\n", no, nargs, true_argc);
         }
     }
-    return w2c_kernel_syscall(my_linux, no, true_argc, in);
+    r = w2c_kernel_syscall(my_linux, no, true_argc, in);
+    printf("Thread: %d Call = %d Ret = %d\n", my_thread_objid, no, r);
+    switch(r){
+        case -512:
+        case -513:
+        case -514:
+        case -516:
+            w2c_kernel_taskmgmt(my_linux, 5, 0, 0, 0);
+            break;
+        default:
+            /* Do nothing */
+            break;
+    }
+    return r;
 }
 
 static uint32_t
