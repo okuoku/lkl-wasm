@@ -346,6 +346,42 @@ newinstance(){
     my_linux = me;
 }
 
+typedef void (*sighandler1)(w2c_user*, uint32_t);
+typedef void (*sighandler3)(w2c_user*, uint32_t, uint32_t, uint32_t);
+
+static void
+handlesignal(void){
+    int i;
+    uint32_t* buf;
+    uint32_t sh;
+    uint32_t ptr0;
+    uint32_t ptr1;
+    uint32_t ptr2;
+    sighandler1 s1;
+    sighandler3 s3;
+    buf = (uint32_t*)pool_alloc(128*4);
+    ptr0 = pool_lklptr(buf);
+    memset(buf, 0, 128*4);
+    w2c_kernel_taskmgmt(my_linux, 5, ptr0, 0, 0);
+    for(i=0;i!=13;i++){
+        printf("[%03d]: 0x%08x %d\n", i, buf[i], buf[i]);
+    }
+
+    /* Call signal handler */
+    ptr1 = ptr0 + 16; /* top of siginfo */
+    ptr2 = 0; /* ucontext_t */
+    sh = buf[0];
+    if(buf[1] & 4 /* SA_SIGINFO */){
+        s3 = (sighandler3)userfuncs.data[sh].func;
+        s3(my_user, buf[12 /* sig */], ptr1, ptr2);
+    }else{
+        s1 = (sighandler1)userfuncs.data[sh].func;
+        s1(my_user, buf[12 /* sig */]);
+    }
+
+    pool_free(buf);
+}
+
 uint32_t /* -errno */
 runsyscall32(uint32_t no, uint32_t nargs, uint32_t in){
     int32_t r;
@@ -366,7 +402,7 @@ runsyscall32(uint32_t no, uint32_t nargs, uint32_t in){
         case -513:
         case -514:
         case -516:
-            w2c_kernel_taskmgmt(my_linux, 5, 0, 0, 0);
+            handlesignal();
             break;
         default:
             /* Do nothing */
