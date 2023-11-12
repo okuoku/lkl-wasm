@@ -19,13 +19,14 @@
 #ifdef __wasm__
 
 void
-wasmlinux_get_signal(void){
+wasmlinux_get_signal(void* out){
     bool b;
     struct ksignal ksig;
     b = get_signal(&ksig);
     if(b){
-        printk("get_signal: signal %d ksigsize = %d\n", 
-                ksig.sig, sizeof(ksig));
+        printk("get_signal: signal %d sizeof(ksignal) = %d sizeof(sigaction) = %d sizeof(siginfo) = %d \n", 
+                ksig.sig, sizeof(ksig), sizeof(ksig.ka), sizeof(ksig.info));
+        memcpy(out, &ksig, sizeof(ksig));
     }else{
         printk("get_signal: No signal.\n");
     }
