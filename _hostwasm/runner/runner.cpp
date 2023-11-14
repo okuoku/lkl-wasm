@@ -501,8 +501,9 @@ w2c_env_wasmlinux_tlsrw32(struct w2c_env* env, uint32_t op, uint32_t val){
 }
 
 static uint32_t
-create_envblock(const char* argv[], char const* envp){
-    size_t o, s, arrsize, total, argtotal, envpsize;
+create_envblock(const char* argv[], const char* envp[]){
+    size_t argc, envc;
+    size_t o, s, arrsize, total, argtotal, envpoff, envptotal;
     int i;
     uint32_t ptr0;
     uint32_t* a;
@@ -516,32 +517,51 @@ create_envblock(const char* argv[], char const* envp){
 
     /* Pass1: Calc bufsize */
     i = 0;
+    argc = 0;
     argtotal = 0;
+    arrsize = 1; /* argc */
     while(argv[i]){
+        argc++;
         argtotal += strnlen(argv[i], 1024*1024);
         argtotal ++; /* NUL */
         i++;
     }
-    arrsize = i+2 /* terminator + envp */;
-    envpsize = strnlen(envp, 1024*1024);
-    envpsize++; /* NUL */
+    arrsize += i+1 /* terminator */;
+    envpoff = i+2;
+    i = 0;
+    envptotal = 0;
+    envc = 0;
+    while(envp[i]){
+        envptotal +=strnlen(envp[i], 1024*1024);
+        envptotal ++; /* NUL */
+        i++;
+        envc++;
+    }
+    arrsize += i+1; /* terminator */
 
-    total = arrsize*4 + argtotal + envpsize;
-    buf = (char*)pool_alloc(total*4 + argtotal + envpsize);
+    total = arrsize*4 + argtotal + envptotal;
+    buf = (char*)pool_alloc(total);
     ptr0 = pool_lklptr(buf);
     memset(buf, 0, total);
 
     /* Pass2: Fill buffer */
-    o = arrsize*4;
+    o = arrsize*4; /* offset to argv buffer */
     a = (uint32_t*)buf;
-    a[0] = arrsize - 2; /* argc */
-    for(i=0;i!=a[0];i++){
+    a[0] = argc;
+    for(i=0;i!=argc;i++){
         a[i+1] = pool_lklptr(buf + o); /* argv* */
         s = strnlen(argv[i], 1024*1024);
         memcpy(buf + o, argv[i], s);
-        o += (s + 1);
+        o += (s + 1); /* NUL */
     }
-    memcpy(buf + o, envp, envpsize);
+    a = &a[envpoff];
+    for(i=0;i!=envc;i++){
+        a[i] = pool_lklptr(buf + o);
+        s = strnlen(envp[i], 1024*1024);
+        memcpy(buf + o, envp[i], s);
+        o += (s + 1); /* NUL */
+    }
+    printf("argc,envc = %ld,%ld\n",argc,envc);
     return ptr0;
 }
 
@@ -552,9 +572,9 @@ thr_user(uint32_t procctx){
     uint32_t envblock;
     uint32_t ret;
     const char* argv[] = {
-        "dummy", 0
+        "dummy", "a", "b", "c", "d e f", 0
     };
-    const char* envp = "";
+    const char* envp[] = {"PATH=/bin", 0};
 
     /* Allocate linux context */
     newinstance();

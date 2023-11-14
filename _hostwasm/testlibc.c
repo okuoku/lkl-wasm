@@ -36,10 +36,23 @@ int
 __original_main(int ac, char** av, char** envp){
     int count = 0;
     fprintf(stderr, "Hello, world!\n");
-    int r;
+    int i,r;
     void* p;
     pthread_t thr;
     struct sigaction sa;
+
+    /* Dump args */
+    i = 0;
+    while(av[i]){
+        fprintf(stderr, "[%d/%d]: %s\n", i, ac, av[i]);
+        i++;
+    }
+
+    i= 0;
+    while(envp[i]){
+        fprintf(stderr, "env [%d]: %s\n", i, envp[i]);
+        i++;
+    }
 
     sigemptyset(&sa.sa_mask);
 
