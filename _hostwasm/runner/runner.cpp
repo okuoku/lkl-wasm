@@ -17,12 +17,17 @@ thread_local w2c_kernel* my_linux;
 
 /* Userproc */
 #include "user.h"
-w2c_user the_user;
-thread_local w2c_user* my_user;
-wasm_rt_funcref_table_t userfuncs;
-uint32_t userdata;
-uint32_t userstack;
+struct user_instance {
+    w2c_user the_user; /* instance for main thread */
+    wasm_rt_funcref_table_t userfuncs;
+    uint32_t userdata;
+    uint32_t userstack;
+};
+
 uint32_t usertablebase;
+thread_local struct user_instance* my_user_i;
+thread_local w2c_user* my_user;
+
 
 /* Pool management */
 uint8_t* mpool_base;
@@ -376,10 +381,10 @@ handlesignal(void){
     ptr2 = 0; /* ucontext_t */
     sh = buf[0];
     if(buf[1] & 4 /* SA_SIGINFO */){
-        s3 = (sighandler3)userfuncs.data[sh].func;
+        s3 = (sighandler3)my_user_i->userfuncs.data[sh].func;
         s3(my_user, buf[12 /* sig */], ptr1, ptr2);
     }else{
-        s1 = (sighandler1)userfuncs.data[sh].func;
+        s1 = (sighandler1)my_user_i->userfuncs.data[sh].func;
         s1(my_user, buf[12 /* sig */]);
     }
 
@@ -467,21 +472,24 @@ struct vfork_ctx {
 
 class thr_exit {};
 
+thread_local struct vfork_ctx* vfork_ctx;
+
 static void
-thr_user_vfork(w2c_kernel* kern, w2c_user* user, 
+thr_user_vfork(w2c_kernel* kern, struct user_instance* ui, 
                uint32_t procctx, uint32_t envblock){
     uint32_t ret;
     uint32_t stack;
 
+    /* Instantiate and assign user module */
+    my_user_i = ui;
+    my_user = &ui->the_user;
+    wasm2c_user_instantiate(my_user, 0, 0);
+    w2c_user_0x5F_wasm_apply_data_relocs(my_user);
+    vfork_ctx = 0;
+
     /* Allocate linux thread context */
     my_linux = kern;
     prepare_newthread();
-
-    /* Assign user instance */
-    my_user = user;
-    stack = pool_lklptr(pool_alloc(1024*1024));
-    stack += (1024*1024 - 256);
-    my_user->w2c_env_0x5F_stack_pointer = &stack;
 
     /* Assign process ctx */
     newtask_apply(procctx);
@@ -497,8 +505,6 @@ thr_user_vfork(w2c_kernel* kern, w2c_user* user,
     // FIXME: free envblock and stack at exit()
 }
 
-thread_local struct vfork_ctx* vfork_ctx;
-
 int /* exported to w2c user */
 wasmlinux_run_to_execve(jmp_buf* jb){
     uint32_t procctx;
@@ -509,12 +515,30 @@ wasmlinux_run_to_execve(jmp_buf* jb){
     vfork_ctx->parent_process_ctx = current_process_ctx;
 
     procctx = newtask_process();
+    printf("procctx = %d\n", procctx);
 
     /* Switch to new kernel instance */
     newinstance();
     newtask_apply(procctx);
 
     return 0;
+}
+
+static struct user_instance*
+newuserinstance(void){
+    struct user_instance* ui;
+    ui = (struct user_instance*)malloc(sizeof(struct user_instance));
+
+    ui->userstack = pool_lklptr(pool_alloc(1024*1024));
+    ui->userdata = pool_lklptr(pool_alloc(wasm2c_user_max_env_memory));
+    /* FIXME: calc max size */
+    wasm_rt_allocate_funcref_table(&ui->userfuncs, 1024, 1024);
+    usertablebase = 0;
+    printf("(user) data = %x\n", ui->userdata);
+    printf("(user) stack = %x\n", ui->userstack);
+    printf("(user) tablebase = %x\n", usertablebase);
+
+    return ui;
 }
 
 uint32_t runsyscall32(uint32_t no, uint32_t nargs, uint32_t in);
@@ -529,7 +553,7 @@ emul_execve(uint32_t nargs, uint32_t in){
     uint32_t* envp;
     uint32_t envblock;
     w2c_kernel* newkernel;
-    w2c_user* newuser;
+    struct user_instance* ui;
     std::thread* thr;
     args = (uint32_t*)pool_hostptr(in);
 
@@ -541,19 +565,19 @@ emul_execve(uint32_t nargs, uint32_t in){
     mypid = runsyscall32(172 /* __NR_getpid */, 0, 0);
 
     /* Restore back to parent context */
-    newtask_apply(vfork_ctx->parent_process_ctx);
     newkernel = my_linux;
     my_linux = vfork_ctx->parent_kernel_ctx;
+    procctx = current_process_ctx;
+    newtask_apply(vfork_ctx->parent_process_ctx);
 
     /* Instantiate user code */
-    newuser = (w2c_user*)malloc(sizeof(w2c_user));
-    memcpy(newuser, my_user, sizeof(w2c_user));
+    ui = newuserinstance(); /* FIXME: Leak */
 
     /* Spawn new user thread */
     argv = (uint32_t*)pool_hostptr(args[1]);
     envp = (uint32_t*)pool_hostptr(args[2]);
     envblock = create_envblock_frompool(argv, envp);
-    thr = new std::thread(thr_user_vfork, newkernel, newuser, 
+    thr = new std::thread(thr_user_vfork, newkernel, ui, 
                           procctx, envblock);
     thr->detach();
 
@@ -664,17 +688,17 @@ w2c_env_0x5F_table_base(struct w2c_env* bogus){
 
 uint32_t*
 w2c_env_0x5F_memory_base(struct w2c_env* bogus){
-    return &userdata;
+    return &my_user_i->userdata;
 }
 
 uint32_t*
 w2c_env_0x5F_stack_pointer(struct w2c_env* bogus){
-    return &userstack;
+    return &my_user_i->userstack;
 }
 
 wasm_rt_funcref_table_t* 
 w2c_env_0x5F_indirect_function_table(struct w2c_env* bogus){
-    return &userfuncs;
+    return &my_user_i->userfuncs;
 }
 
 wasm_rt_memory_t* 
@@ -772,7 +796,7 @@ create_envblock(const char* argv[], const char* envp[]){
 
 
 static void
-thr_user(uint32_t procctx){
+thr_user(user_instance* ui, uint32_t procctx){
     uint32_t envblock;
     uint32_t ret;
     const char* argv[] = {
@@ -780,13 +804,16 @@ thr_user(uint32_t procctx){
     };
     const char* envp[] = {"PATH=/bin", 0};
 
+    /* Instantiate and assign user module */
+    my_user_i = ui;
+    my_user = &ui->the_user;
+    wasm2c_user_instantiate(my_user, 0, 0);
+    w2c_user_0x5F_wasm_apply_data_relocs(my_user);
+    vfork_ctx = 0;
+
     /* Allocate linux context */
     newinstance();
     prepare_newthread();
-
-    /* Assign user instance */
-    my_user = &the_user;
-    vfork_ctx = 0;
 
     /* Assign process ctx */
     newtask_apply(procctx);
@@ -822,27 +849,16 @@ thr_user(uint32_t procctx){
 
 static void
 spawn_user(void){
+    struct user_instance* ui;
     uint32_t procctx;
     std::thread* thr;
 
-    /* Instantiate user module */
-    userstack = pool_lklptr(pool_alloc(1024*1024));
-    userdata = pool_lklptr(pool_alloc(wasm2c_user_max_env_memory));
-    /* FIXME: calc max size */
-    wasm_rt_allocate_funcref_table(&userfuncs, 1024, 1024);
-    usertablebase = 0;
-    printf("(user) data = %x\n", userdata);
-    printf("(user) stack = %x\n", userstack);
-    printf("(user) tablebase = %x\n", usertablebase);
-
-    wasm2c_user_instantiate(&the_user, 0, 0);
-    w2c_user_0x5F_wasm_apply_data_relocs(&the_user);
-
+    ui = newuserinstance();
     /* fork */
     procctx = newtask_process();
     printf("procctx = %d\n", procctx);
 
-    thr = new std::thread(thr_user, procctx);
+    thr = new std::thread(thr_user, ui, procctx);
     thr->detach();
 }
 
@@ -896,7 +912,7 @@ thr_uthr(struct userthr_args* args){
 
     /* Allocate new instance */
     me = (w2c_user*)malloc(sizeof(w2c_user));
-    memcpy(me, &the_user, sizeof(w2c_user));
+    memcpy(me, &my_user_i->the_user, sizeof(w2c_user));
     /* Override stack pointer */
     me->w2c_env_0x5F_stack_pointer = &stack; /* FIXME: is bottom??? */
     //printf("New stack pointer = %d\n", me->w2c_0x5F_stack_pointer);
@@ -905,7 +921,7 @@ thr_uthr(struct userthr_args* args){
     my_user = me;
 
     /* Ready to roll, call fn */
-    start = (startroutine)userfuncs.data[fn].func;
+    start = (startroutine)my_user_i->userfuncs.data[fn].func;
     printf("Calling %d (%p) ...\n",fn,start);
     try {
         start(my_user, arg);

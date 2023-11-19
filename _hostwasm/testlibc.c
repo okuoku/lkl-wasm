@@ -70,11 +70,14 @@ __original_main(int ac, char** av, char** envp){
             fprintf(stderr, "Should not reach here %d,%d\n", r, errno);
         }else{
             /* parent process */
-            fprintf(stderr, "Forked to %d\n", pid);
-            return 0;
+            fprintf(stderr, "Forked to %d (I'm %d)\n", pid, getpid());
         }
     }
 
+    for(;;){
+        fprintf(stderr, "Sleep...\n");
+        sleep(1);
+    }
 
     sigemptyset(&sa.sa_mask);
 
