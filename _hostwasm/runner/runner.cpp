@@ -3,6 +3,8 @@
 #include <stdlib.h>
 #include "mplite.h"
 
+#include <setjmp.h>
+
 #include <thread>
 #include <mutex>
 #include <condition_variable>
@@ -306,8 +308,10 @@ newtask_thread(void){
     return w2c_kernel_taskmgmt(my_linux, 2, 0, 0, 0);
 }
 
+thread_local uint32_t current_process_ctx;
 static void
 newtask_apply(uint32_t ctx){
+    current_process_ctx = ctx;
     w2c_kernel_taskmgmt(my_linux, 3, ctx, 0, 0);
 }
 
@@ -382,21 +386,222 @@ handlesignal(void){
     pool_free(buf);
 }
 
+
+static uint32_t
+create_envblock_frompool(const uint32_t argv[], const uint32_t envp[]){
+    size_t argc, envc;
+    size_t o, s, arrsize, total, argtotal, envpoff, envptotal;
+    int i;
+    uint32_t ptr0;
+    uint32_t* a;
+    const char* x;
+    char* buf;
+    /* [0] argc = envblock
+     * [1] argv(0)
+     * [2] argv(1)
+     *   :
+     * [argc] argv(argc) = 0
+     * [argc+1] envp */
+
+    /* Pass1: Calc bufsize */
+    i = 0;
+    argc = 0;
+    argtotal = 0;
+    arrsize = 1; /* argc */
+    while(argv[i]){
+        argc++;
+        x = (const char*)pool_hostptr(argv[i]);
+        argtotal += strnlen(x, 1024*1024);
+        argtotal ++; /* NUL */
+        i++;
+    }
+    arrsize += i+1 /* terminator */;
+    envpoff = i+2;
+    i = 0;
+    envptotal = 0;
+    envc = 0;
+    while(envp[i]){
+        x = (const char*)pool_hostptr(envp[i]);
+        envptotal +=strnlen(x, 1024*1024);
+        envptotal ++; /* NUL */
+        i++;
+        envc++;
+    }
+    arrsize += i+1; /* terminator */
+
+    total = arrsize*4 + argtotal + envptotal;
+    buf = (char*)pool_alloc(total);
+    ptr0 = pool_lklptr(buf);
+    memset(buf, 0, total);
+
+    /* Pass2: Fill buffer */
+    o = arrsize*4; /* offset to argv buffer */
+    a = (uint32_t*)buf;
+    a[0] = argc;
+    for(i=0;i!=argc;i++){
+        a[i+1] = pool_lklptr(buf + o); /* argv* */
+        x = (const char*)pool_hostptr(argv[i]);
+        s = strnlen(x, 1024*1024);
+        memcpy(buf + o, x, s);
+        o += (s + 1); /* NUL */
+    }
+    a = &a[envpoff];
+    for(i=0;i!=envc;i++){
+        a[i] = pool_lklptr(buf + o);
+        x = (const char*)pool_hostptr(envp[i]);
+        s = strnlen(x, 1024*1024);
+        memcpy(buf + o, x, s);
+        o += (s + 1); /* NUL */
+    }
+    printf("argc,envc = %ld,%ld\n",argc,envc);
+    return ptr0;
+}
+
+
+struct vfork_ctx {
+    jmp_buf* jb;
+    w2c_kernel* parent_kernel_ctx;
+    uint32_t parent_process_ctx;
+    uint32_t child_process_ctx;
+};
+
+class thr_exit {};
+
+static void
+thr_user_vfork(w2c_kernel* kern, w2c_user* user, 
+               uint32_t procctx, uint32_t envblock){
+    uint32_t ret;
+    uint32_t stack;
+
+    /* Allocate linux thread context */
+    my_linux = kern;
+    prepare_newthread();
+
+    /* Assign user instance */
+    my_user = user;
+    stack = pool_lklptr(pool_alloc(1024*1024));
+    stack += (1024*1024 - 256);
+    my_user->w2c_env_0x5F_stack_pointer = &stack;
+
+    /* Assign process ctx */
+    newtask_apply(procctx);
+
+    /* Run usercode */
+    try {
+        w2c_user_0x5Fstart_c(my_user, envblock);
+        thr_tls_cleanup();
+    } catch (thr_exit &req) {
+        printf("Exiting thread(main thread).\n");
+        thr_tls_cleanup();
+    }
+    // FIXME: free envblock and stack at exit()
+}
+
+thread_local struct vfork_ctx* vfork_ctx;
+
+int /* exported to w2c user */
+wasmlinux_run_to_execve(jmp_buf* jb){
+    uint32_t procctx;
+
+    vfork_ctx = (struct vfork_ctx*)malloc(sizeof(struct vfork_ctx));
+    vfork_ctx->jb = jb;
+    vfork_ctx->parent_kernel_ctx = my_linux;
+    vfork_ctx->parent_process_ctx = current_process_ctx;
+
+    procctx = newtask_process();
+
+    /* Switch to new kernel instance */
+    newinstance();
+    newtask_apply(procctx);
+
+    return 0;
+}
+
+uint32_t runsyscall32(uint32_t no, uint32_t nargs, uint32_t in);
+uint32_t
+emul_execve(uint32_t nargs, uint32_t in){
+    jmp_buf* jb;
+    uint32_t mypid;
+    uint32_t procctx;
+    uint32_t stack;
+    uint32_t* args;
+    uint32_t* argv;
+    uint32_t* envp;
+    uint32_t envblock;
+    w2c_kernel* newkernel;
+    w2c_user* newuser;
+    std::thread* thr;
+    args = (uint32_t*)pool_hostptr(in);
+
+    if(!vfork_ctx){
+        /* FIXME: Replace current image */
+        printf("not implemented.\n");
+        abort();
+    }
+    mypid = runsyscall32(172 /* __NR_getpid */, 0, 0);
+
+    /* Restore back to parent context */
+    newtask_apply(vfork_ctx->parent_process_ctx);
+    newkernel = my_linux;
+    my_linux = vfork_ctx->parent_kernel_ctx;
+
+    /* Instantiate user code */
+    newuser = (w2c_user*)malloc(sizeof(w2c_user));
+    memcpy(newuser, my_user, sizeof(w2c_user));
+
+    /* Spawn new user thread */
+    argv = (uint32_t*)pool_hostptr(args[1]);
+    envp = (uint32_t*)pool_hostptr(args[2]);
+    envblock = create_envblock_frompool(argv, envp);
+    thr = new std::thread(thr_user_vfork, newkernel, newuser, 
+                          procctx, envblock);
+    thr->detach();
+
+    /* Back to vfork() point */
+    jb = vfork_ctx->jb;
+    free(vfork_ctx);
+    vfork_ctx = 0;
+    longjmp(*jb, mypid);
+    return -1;
+}
+
+static uint32_t /* -errno */
+emul_clone(uint32_t nargs, uint32_t in){
+    printf("not implemented.\n");
+    abort();
+}
+
 uint32_t /* -errno */
 runsyscall32(uint32_t no, uint32_t nargs, uint32_t in){
     int32_t r;
     int true_argc;
-    true_argc = syscall_argc_tbl[no];
-    if(true_argc == -1){
-        printf("Unknown syscall! (%d)\n", no);
-        true_argc = nargs;
-    }else{
-        if(true_argc != nargs){
-            printf("Override syscall args (%d: %d => %d)\n", no, nargs, true_argc);
-        }
+    /* filter emulated syscall */
+    switch(no){
+        case LKL__NR_clone:
+            r = emul_clone(nargs, in);
+            break;
+        case LKL__NR_execve:
+            r = emul_execve(nargs, in);
+            break;
+        case LKL__NR_execveat:
+            printf("not implemented.\n");
+            abort();
+            break;
+        default:
+            true_argc = syscall_argc_tbl[no];
+            if(true_argc == -1){
+                printf("Unknown syscall! (%d)\n", no);
+                true_argc = nargs;
+            }else{
+                if(true_argc != nargs){
+                    printf("Override syscall args (%d: %d => %d)\n", no, nargs, true_argc);
+                }
+            }
+            /* Use LKL */
+            r = w2c_kernel_syscall(my_linux, no, true_argc, in);
+            printf("Thread: %d Call = %d Ret = %d\n", my_thread_objid, no, r);
+            break;
     }
-    r = w2c_kernel_syscall(my_linux, no, true_argc, in);
-    printf("Thread: %d Call = %d Ret = %d\n", my_thread_objid, no, r);
     switch(r){
         case -512:
         case -513:
@@ -565,7 +770,6 @@ create_envblock(const char* argv[], const char* envp[]){
     return ptr0;
 }
 
-class thr_exit {};
 
 static void
 thr_user(uint32_t procctx){
@@ -582,6 +786,7 @@ thr_user(uint32_t procctx){
 
     /* Assign user instance */
     my_user = &the_user;
+    vfork_ctx = 0;
 
     /* Assign process ctx */
     newtask_apply(procctx);
@@ -630,7 +835,7 @@ spawn_user(void){
     printf("(user) stack = %x\n", userstack);
     printf("(user) tablebase = %x\n", usertablebase);
 
-    wasm2c_user_instantiate(&the_user, 0);
+    wasm2c_user_instantiate(&the_user, 0, 0);
     w2c_user_0x5F_wasm_apply_data_relocs(&the_user);
 
     /* fork */
