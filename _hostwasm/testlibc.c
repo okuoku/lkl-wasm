@@ -1,3 +1,4 @@
+#include <sys/types.h>
 #include <stdio.h>
 #include <errno.h>
 #include <unistd.h>
@@ -34,6 +35,8 @@ sig_test_sigaction(int w, siginfo_t* si, void* p){
 
 int
 __original_main(int ac, char** av, char** envp){
+    pid_t pid;
+    const char* next[] = {"dummy", "u", "m", 0};
     int count = 0;
     fprintf(stderr, "Hello, world!\n");
     int i,r;
@@ -53,6 +56,25 @@ __original_main(int ac, char** av, char** envp){
         fprintf(stderr, "env [%d]: %s\n", i, envp[i]);
         i++;
     }
+
+    /* vfork & execve test */
+    if(ac >= 2 && av[1][0] == 'u'){
+        fprintf(stderr, "execve-ed. my pid is %d\n", getpid());
+        return 0;
+    }else{
+        pid = vfork();
+        if(! pid){
+            /* child process */
+            fprintf(stderr, "Going to execve()...(I'm %d)\n", getpid());
+            r = execve(av[0], next, NULL);
+            fprintf(stderr, "Should not reach here %d,%d\n", r, errno);
+        }else{
+            /* parent process */
+            fprintf(stderr, "Forked to %d\n", pid);
+            return 0;
+        }
+    }
+
 
     sigemptyset(&sa.sa_mask);
 
