@@ -205,8 +205,8 @@ export do_autoconf
 $(OUTPUT)Makefile.conf: Makefile.autoconf
 	$(shell mkdir -p $(OUTPUT)/include)
 	$(shell mkdir -p $(OUTPUT)/tests)
-	$(shell echo -n "" > $(OUTPUT)/include/lkl_autoconf.h)
-	$(shell echo -n "" > $(OUTPUT)/include/kernel_config.h)
-	$(shell echo -n "" > $(OUTPUT)/kernel.config)
-	$(shell echo -n "" > $(OUTPUT)/tests/autoconf.sh)
+	$(shell touch $(OUTPUT)/include/lkl_autoconf.h)
+	$(shell touch $(OUTPUT)/include/kernel_config.h)
+	$(shell touch $(OUTPUT)/kernel.config)
+	$(shell touch $(OUTPUT)/tests/autoconf.sh)
 	@echo "$$do_autoconf" > $(OUTPUT)/Makefile.conf
