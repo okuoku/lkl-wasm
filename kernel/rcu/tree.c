@@ -2770,6 +2770,9 @@ static void check_cb_ovld(struct rcu_data *rdp)
  * Implementation of these memory-ordering guarantees is described here:
  * Documentation/RCU/Design/Memory-Ordering/Tree-RCU-Memory-Ordering.rst.
  */
+#ifdef __wasm__
+#error Don't use this
+#endif
 void call_rcu(struct rcu_head *head, rcu_callback_t func)
 {
 	static atomic_t doublefrees;

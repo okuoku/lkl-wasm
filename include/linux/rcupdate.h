@@ -918,7 +918,15 @@ static inline notrace void rcu_read_unlock_sched_notrace(void)
  * Does the specified offset indicate that the corresponding rcu_head
  * structure can be handled by kvfree_rcu()?
  */
+#ifndef __wasm__
 #define __is_kvfree_rcu_offset(offset) ((offset) < 4096)
+#define offsetof_rcu offsetof
+#else
+// FIXME: On Wasm, function pointers can be below 4096 thus use different encoding
+//        But obviously we need more stable solution..
+#define __is_kvfree_rcu_offset(offset) ((offset) < 0)
+#define offsetof_rcu(x,y) (((signed long)offsetof(x,y)) - 4096)
+#endif
 
 /**
  * kfree_rcu() - kfree an object after a grace period.
@@ -984,9 +992,9 @@ do {									\
 	typeof (ptr) ___p = (ptr);					\
 									\
 	if (___p) {									\
-		BUILD_BUG_ON(!__is_kvfree_rcu_offset(offsetof(typeof(*(ptr)), rhf)));	\
+		BUILD_BUG_ON(!__is_kvfree_rcu_offset(offsetof_rcu(typeof(*(ptr)), rhf)));	\
 		kvfree_call_rcu(&((___p)->rhf), (rcu_callback_t)(unsigned long)		\
-			(offsetof(typeof(*(ptr)), rhf)));				\
+			(offsetof_rcu(typeof(*(ptr)), rhf)));			\
 	}										\
 } while (0)
 

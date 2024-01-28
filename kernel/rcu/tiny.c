@@ -85,12 +85,18 @@ void rcu_sched_clock_irq(int user)
 static inline bool rcu_reclaim_tiny(struct rcu_head *head)
 {
 	rcu_callback_t f;
+#ifndef __wasm__
 	unsigned long offset = (unsigned long)head->func;
+        const unsigned long true_offset = offset;
+#else
+	signed long offset = (signed long)head->func;
+        const signed long true_offset = offset + 4096;
+#endif
 
 	rcu_lock_acquire(&rcu_callback_map);
 	if (__is_kvfree_rcu_offset(offset)) {
-		trace_rcu_invoke_kvfree_callback("", head, offset);
-		kvfree((void *)head - offset);
+		trace_rcu_invoke_kvfree_callback("", head, true_offset);
+		kvfree((void *)head - true_offset);
 		rcu_lock_release(&rcu_callback_map);
 		return true;
 	}
